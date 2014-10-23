@@ -348,8 +348,8 @@ static int diff_regular (char const *path1, char const *path2)
 
 static int diff_directory (char const *path1, char const *path2)
 {
-    char *name1, *name2;
-    int err, i, len1, len2, longest, nents1, nents2;
+    char *file1, *file2, *name1, *name2;
+    int cmp, err, i, j, len1, len2, longest, nents1, nents2;
     struct dirent **names1, **names2;
 
     nents1 = scandir (path1, &names1, NULL, alphasort);
@@ -367,20 +367,12 @@ static int diff_directory (char const *path1, char const *path2)
         goto done;
     }
 
-    if (nents1 != nents2) {
-        printf ("diff directory nents %s (%d) vs %s (%d)\n", path1, nents1, path2, nents2);
-        goto done;
-    }
-
     longest = 0;
     for (i = 0; i < nents1; i ++) {
-        if (strcmp (names1[i]->d_name, names2[i]->d_name) != 0) {
-            printf ("diff directory name mismatch %s (%s) vs %s (%s)\n",
-                    path1, names1[i]->d_name, path2, names2[i]->d_name);
-            goto done;
-        }
         len1 = strlen (names1[i]->d_name);
         if (longest < len1) longest = len1;
+        len2 = strlen (names1[i]->d_name);
+        if (longest < len2) longest = len2;
     }
 
     len1  = strlen (path1);
@@ -392,13 +384,47 @@ static int diff_directory (char const *path1, char const *path2)
     name1[len1++] = '/';
     name2[len2++] = '/';
 
+    cmp = 0;
     err = 0;
-    for (i = 0; i < nents1; i ++) {
-        if ((strcmp (names1[i]->d_name, ".") != 0) && (strcmp (names1[i]->d_name, "..") != 0)) {
-            strcpy (name1 + len1, names1[i]->d_name);
-            strcpy (name2 + len2, names2[i]->d_name);
-            err |= diff_file (name1, name2);
+    for (i = j = 0; (i < nents1) || (j < nents2);) {
+        file1 = (i < nents1) ? names1[i]->d_name : NULL;
+        file2 = (j < nents2) ? names2[j]->d_name : NULL;
+
+        // skip any '.' or '..' entries
+        if ((i < nents1) && ((strcmp (file1, ".") == 0) || (strcmp (file1, "..") == 0))) {
+            i ++;
+            continue;
         }
+
+        if ((j < nents2) && ((strcmp (file2, ".") == 0) || (strcmp (file2, "..") == 0))) {
+            j ++;
+            continue;
+        }
+
+        // do string compare iff there is a name in both arrays
+        if ((i < nents1) && (j < nents2)) cmp = strcmp (file1, file2);
+
+        // if second array empty or its name is after first, first array has a unique name
+        if ((j >= nents2) || (cmp < 0)) {
+            printf ("diff directory only %s contains %s\n", path1, file1);
+            i ++;
+            err = 1;
+            continue;
+        }
+
+        // if first array empty or its name is after second, second array has a unique name
+        if ((i >= nents1) || (cmp > 0)) {
+            printf ("diff directory only %s contains %s\n", path2, file2);
+            j ++;
+            err = 1;
+            continue;
+        }
+
+        // both names match, do nesting compare of files
+        strcpy (name1 + len1, file1);
+        strcpy (name2 + len2, file2);
+        err |= diff_file (name1, name2);
+        i ++; j ++;
     }
 
 done:
