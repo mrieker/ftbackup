@@ -827,6 +827,7 @@ void FTBReader::read_first_block ()
      * Step through file by minimum block size until we find a valid block header.
      */
     bigBlock    = NULL;
+    bs          = 0;
     bytesCopied = 0;
     miniBlock   = (Block *) alloca (MINBLOCKSIZE);
     while (true) {

@@ -19,6 +19,8 @@ static bool diff_special (char const *path1, char const *path2, struct stat *sta
 
 static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv);
+
+static int cmd_version (int argc, char **argv);
 
 int main (int argc, char **argv)
 {
@@ -30,11 +32,14 @@ int main (int argc, char **argv)
         if (strcasecmp (argv[1], "diff")    == 0) return cmd_diff    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "list")    == 0) return cmd_list    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "version") == 0) return cmd_version (argc - 1, argv + 1);
         fprintf (stderr, "ftbackup: unknown command %s\n", argv[1]);
     }
     fprintf (stderr, "usage: ftbackup backup ...\n");
+    fprintf (stderr, "       ftbackup diff ...\n");
     fprintf (stderr, "       ftbackup list ...\n");
     fprintf (stderr, "       ftbackup restore ...\n");
+    fprintf (stderr, "       ftbackup version\n");
     return EX_CMD;
 }
 
@@ -612,6 +617,15 @@ char *FTBRestorer::maybe_output_listing (char *dstname, Header *hdr)
         print_header (stderr, hdr, dstname);
     }
     return dstname;
+}
+
+/**
+ * @brief Display version string as given by Makefile.
+ */
+static int cmd_version (int argc, char **argv)
+{
+    printf ("%s %s%s\n", GITCOMMITHASH, GITCOMMITDATE, (GITCOMMITCLEAN ? "" : " (dirty)"));
+    return 0;
 }
 
 /**
