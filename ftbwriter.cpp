@@ -4,6 +4,33 @@
 
 FTBWriter::FTBWriter ()
 {
+    opt_verbose = 0;
+    ioptions    = 0;
+    ooptions    = 0;
+    opt_verbsec = 0;
+    opt_since   = 0;
+
+    xorblocks   = NULL;
+    zisopen     = 0;
+    inodesname  = NULL;
+    inodesdevno = 0;
+    inodeslist  = NULL;
+    ssfd        = -1;
+    lastverbsec = 0;
+    inodessize  = 0;
+    inodesused  = 0;
+    lastfileno  = 0;
+    lastseqno   = 0;
+    lastxorno   = 0;
+    memset (&zstrm, 0, sizeof zstrm);
+
+    memset (compr2write_slots, 0, sizeof compr2write_slots);
+    memset (main2compr_slots,  0, sizeof main2compr_slots);
+    compr2write_next = 0;
+    compr2write_used = 0;
+    main2compr_next  = 0;
+    main2compr_used  = 0;
+
     pthread_cond_init  (&compr2write_cond,  NULL);
     pthread_cond_init  (&main2compr_cond,   NULL);
     pthread_mutex_init (&compr2write_mutex, NULL);
@@ -32,7 +59,7 @@ FTBWriter::~FTBWriter ()
         free (inodeslist);
     }
 
-    if ((ssfd != STDIN_FILENO) && (ssfd != STDOUT_FILENO) && (ssfd != STDERR_FILENO)) {
+    if (ssfd >= 0) {
         close (ssfd);
     }
 
@@ -87,6 +114,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
         if (isatty (ssfd)) {
             fprintf (stderr, "ftbackup: cannot write saveset to a tty\n");
             close (ssfd);
+            ssfd = -1;
             return EX_SSIO;
         }
     }
@@ -123,9 +151,11 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
      * Finished, close saveset file.
      */
     if ((strcmp (ssname, "-") != 0) && (close (ssfd) < 0)) {
+        ssfd = -1;
         fprintf (stderr, "ftbackup: close() saveset error: %s\n", strerror (errno));
         return EX_SSIO;
     }
+    ssfd = -1;
 
     return ok ? EX_OK : EX_FILIO;
 }

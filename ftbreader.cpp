@@ -13,6 +13,32 @@ struct LostSSBlock {
 static void slashtonull (char *buf, int len);
 static void nulltoslash (char *buf, int len);
 static bool rmdirentry (char const *dirname, char const *entname);
+
+FTBReader::FTBReader ()
+{
+    opt_incrmntl  = 0;
+    opt_overwrite = 0;
+    opt_simrderrs = 0;
+
+    xorblocks     = NULL;
+    wprwrite      = 0;
+    zisopen       = 0;
+    inodesname    = NULL;
+    wprfile       = NULL;
+    ssfd          = -1;
+    linkedBlocks  = NULL;
+    linkedRBlock  = NULL;
+    memset (&ssstat, 0, sizeof ssstat);
+    inodessize    = 0;
+    inodesused    = 0;
+    lastfileno    = 0;
+    lastseqno     = 0;
+    lastxorno     = 0;
+    pipepos       = 0;
+    readoffset    = 0;
+    gotxors       = NULL;
+    memset (&zstrm,  0, sizeof zstrm);
+}
 
 /**
  * @brief Destructor:  Free off any malloc()d memory & close files.
@@ -37,7 +63,7 @@ FTBReader::~FTBReader ()
     if (wprfile != NULL) {
         fclose (wprfile);
     }
-    if ((ssfd != STDIN_FILENO) && (ssfd != STDOUT_FILENO) && (ssfd != STDERR_FILENO)) {
+    if (ssfd >= 0) {
         close (ssfd);
     }
     while ((linkedBlock = linkedBlocks) != NULL) {
@@ -255,6 +281,7 @@ goodheader:
          * Reached end of saveset, all done.
          */
         close (ssfd);
+        ssfd = -1;
         return ok ? EX_OK : EX_FILIO;
 
     } catch (EndOfSSFile *eossf) {

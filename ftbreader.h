@@ -14,6 +14,7 @@ struct FTBReader : FTBackup {
     bool opt_overwrite;
     uint32_t opt_simrderrs;
 
+    FTBReader ();
     ~FTBReader ();
     int read_saveset (char const *ssname, char const *srcprefix, char const *dstprefix);
     virtual char *maybe_output_listing (char *dstname, Header *hdr) =0;
