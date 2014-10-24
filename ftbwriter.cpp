@@ -59,11 +59,13 @@ FTBWriter::~FTBWriter ()
  * @brief Write saveset.
  * @param ssname = name of saveset (or "-" to write to stdout).
  * @param rootpath = root path of files to back up
+ * @returns exit status code
  */
 int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
 {
+    bool ok;
     Header hdr;
-    int ok, rc;
+    int rc;
     pthread_t compr_thandl, write_thandl;
 
     /*
@@ -131,10 +133,10 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
 /**
  * @brief Write the given file/directory/whatever to the currently open saveset.
  * @param path = path to file
- * @returns 1: no file io errors
- *          0: some io errors
+ * @returns true: no file io errors
+ *         false: some io errors
  */
-int FTBWriter::write_file (char const *path, struct stat const *dirstat)
+bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
 {
     Header *hdr;
     int pathlen;
@@ -145,7 +147,7 @@ int FTBWriter::write_file (char const *path, struct stat const *dirstat)
      */
     if (lstat (path, &statbuf) < 0) {
         fprintf (stderr, "ftbackup: lstat(%s) error: %s\n", path, strerror (errno));
-        return 0;
+        return false;
     }
 
     /*
@@ -153,7 +155,7 @@ int FTBWriter::write_file (char const *path, struct stat const *dirstat)
      */
     if (S_ISSOCK (statbuf.st_mode)) {
         fprintf (stderr, "ftbackup: skipping socket %s\n", path);
-        return 1;
+        return true;
     }
 
     /*
@@ -201,9 +203,10 @@ int FTBWriter::write_file (char const *path, struct stat const *dirstat)
 /**
  * @brief Write a regular file out to the saveset.
  */
-int FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
+bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
 {
-    int fd, ok, rc;
+    bool ok;
+    int fd, rc;
     struct stat statend;
     uint32_t bs, i;
     uint64_t len, ofs;
@@ -212,7 +215,7 @@ int FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     /*
      * Only back up regular files changed since the -since option value.
      */
-    if (hdr->ctimns < opt_since) return 1;
+    if (hdr->ctimns < opt_since) return true;
 
     /*
      * If same inode as a previous file, say this is an hardlink.
@@ -224,8 +227,8 @@ int FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
         uint32_t fileno = i;
         hdr->flags = HFL_HDLINK;
         write_header (hdr);
-        write_raw (&fileno, sizeof fileno, 0);
-        return 1;
+        write_raw (&fileno, sizeof fileno, false);
+        return true;
     }
 
     /*
@@ -234,7 +237,7 @@ int FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     fd = open (hdr->name, O_RDONLY | O_NOATIME | ioptions);
     if (fd < 0) {
         fprintf (stderr, "ftbackup: open(%s) error: %s\n", hdr->name, strerror (errno));
-        return 0;
+        return true;
     }
 
     /*
@@ -247,7 +250,7 @@ int FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
      * We always write the exact number of bytes shown in the header.
      */
     bs = 1 << l2bs;
-    ok = 1;
+    ok = true;
     for (ofs = 0; ofs < hdr->size; ofs += rc) {
         len = hdr->size - ofs;
         if (len > 16384) len = 16384;
@@ -258,7 +261,7 @@ int FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
             rc = read (fd, buf, len);
             if (rc <= 0) {
                 fprintf (stderr, "ftbackup: read(%s@0x%llX) error: %s\n", hdr->name, ofs, ((rc == 0) ? "end of file" : strerror (errno)));
-                ok = 0;
+                ok = false;
             }
         }
         if (!ok) {
@@ -282,7 +285,7 @@ int FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     }
     if (inodesdevno != statbuf->st_dev) {
         fprintf (stderr, "ftbackup: %s different dev_t %lu than %lu\n", hdr->name, statbuf->st_dev, inodesdevno);
-        ok = 0;
+        ok = false;
     } else {
         while (inodesused <= i) {
             inodeslist[inodesused] = 0;
@@ -314,11 +317,12 @@ int FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
 /**
  * @brief Write a directory out to the saveset followed by all the files in the directory.
  */
-int FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
+bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
 {
+    bool ok;
     char *buf, *path;
     char const *name;
-    int i, len, longest, nents, ok;
+    int i, len, longest, nents;
     struct dirent *de, **names;
 
     /*
@@ -327,7 +331,7 @@ int FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     nents = scandir (hdr->name, &names, NULL, alphasort);
     if (nents < 0) {
         fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", hdr->name, strerror (errno));
-        return 0;
+        return false;
     }
 
     /*
@@ -385,7 +389,7 @@ int FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     /*
      * Write all the files in the directory out to the saveset.
      */
-    ok = 1;
+    ok = true;
     for (i = 0; i < nents; i ++) {
         de = names[i];
         name = de->d_name;
@@ -403,38 +407,38 @@ int FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
 /**
  * @brief Write a directory used as a mountpoint, ie, write it as being empty.
  */
-int FTBWriter::write_mountpoint (Header *hdr)
+bool FTBWriter::write_mountpoint (Header *hdr)
 {
     /*
      * Only back up mountpoints changed since the -since option value.
      */
-    if (hdr->ctimns < opt_since) return 1;
+    if (hdr->ctimns < opt_since) return true;
 
     /*
      * Write header out with hdr->size = 0 indicating an empty directory.
      */
     hdr->size = 0;
     write_header (hdr);
-    return 1;
+    return true;
 }
 
 /**
  * @brief Write a symlink out to the saveset.
  */
-int FTBWriter::write_symlink (Header *hdr)
+bool FTBWriter::write_symlink (Header *hdr)
 {
     char *buf;
     int rc;
 
-    if (hdr->ctimns < opt_since) return 1;
+    if (hdr->ctimns < opt_since) return true;
 
     buf = (char *) malloc (hdr->size + 1);
-    while (1) {
+    while (true) {
         if (buf == NULL) NOMEM ();
         rc = readlink (hdr->name, buf, hdr->size + 1);
         if (rc < 0) {
             fprintf (stderr, "ftbackup: readlink(%s) error: %s\n", hdr->name, strerror (errno));
-            return 0;
+            return false;
         }
         if ((uint32_t) rc <= hdr->size) break;
         hdr->size += hdr->size / 2 + 1;
@@ -444,19 +448,19 @@ int FTBWriter::write_symlink (Header *hdr)
     hdr->size = rc;
     write_header (hdr);
     write_queue (buf, rc, 0);
-    return 1;
+    return true;
 }
 
 /**
  * @brief Write a special file (mknod) out to the saveset.
  */
-int FTBWriter::write_special (Header *hdr, dev_t strdev)
+bool FTBWriter::write_special (Header *hdr, dev_t strdev)
 {
-    if (hdr->ctimns < opt_since) return 1;
+    if (hdr->ctimns < opt_since) return true;
     hdr->size = sizeof strdev;
     write_header (hdr);
-    write_raw (&strdev, sizeof strdev, 0);
-    return 1;
+    write_raw (&strdev, sizeof strdev, false);
+    return true;
 }
 
 /**
@@ -472,16 +476,16 @@ void FTBWriter::write_header (Header *hdr)
             print_header (stderr, hdr);
         }
     }
-    write_raw (hdr, (ulong_t)(&hdr->name[hdr->nameln]) - (ulong_t)hdr, 1);
+    write_raw (hdr, (ulong_t)(&hdr->name[hdr->nameln]) - (ulong_t)hdr, true);
 }
 
 /**
  * @brief Write some uncompressed bytes to the saveset, could be header or data.
  * @param buf = address of data to write
  * @param len = length of data to write
- * @param hdr = 1 iff it is a file header; else it is data
+ * @param hdr = true iff it is a file header; else it is data
  */
-void FTBWriter::write_raw (void const *buf, uint32_t len, int hdr)
+void FTBWriter::write_raw (void const *buf, uint32_t len, bool hdr)
 {
     void *mem;
 
@@ -536,7 +540,7 @@ void *FTBWriter::compr_thread ()
     block = NULL;
     bs    = 1 << l2bs;
 
-    while (1) {
+    while (true) {
 
         /*
          * Get data of arbitrary length from main thread to process.
@@ -567,7 +571,7 @@ void *FTBWriter::compr_thread ()
                 if (rc != Z_OK) INTERR (deflateInit, rc);
                 zstrm.next_out  = (Bytef *) no;
                 zstrm.avail_out = ao;
-                zisopen = 1;
+                zisopen = true;
             }
             zstrm.next_in  = (Bytef *) buf;
             zstrm.avail_in = len;
@@ -602,7 +606,7 @@ void *FTBWriter::compr_thread ()
                 if (rc != Z_STREAM_END) INTERR (deflate, rc);
                 rc = deflateEnd (&zstrm);
                 if (rc != Z_OK) INTERR (deflateEnd, rc);
-                zisopen = 0;
+                zisopen = false;
             }
 
             // special case of null buffer means we are done!
@@ -730,7 +734,7 @@ void *FTBWriter::write_thread ()
     xorblocks = (Block **) alloca (xorgc * sizeof *xorblocks);
     memset (xorblocks, 0, xorgc * sizeof *xorblocks);
 
-    while (1) {
+    while (true) {
 
         /*
          * Dequeue a block, waiting if queue is empty.

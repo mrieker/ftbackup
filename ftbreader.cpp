@@ -12,7 +12,7 @@ struct LostSSBlock {
 
 static void slashtonull (char *buf, int len);
 static void nulltoslash (char *buf, int len);
-static int rmdirentry (char const *dirname, char const *entname);
+static bool rmdirentry (char const *dirname, char const *entname);
 
 /**
  * @brief Destructor:  Free off any malloc()d memory & close files.
@@ -59,14 +59,16 @@ FTBReader::~FTBReader ()
 
 /**
  * @brief Read through saveset, listing and/or restoring all files therein.
+ * @returns exit code
  */
 int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char const *dstprefix)
 {
     Block *rblock;
+    bool ok, setimes, thisok;
     char *srcprefixnul;
     DirTime *dirTime, *dirTimes;
     Header basehdr;
-    int cmp, lastfilenofinished, ok, setimes, thisok;
+    int cmp, lastfilenofinished;
     struct timespec times[2];
     uint32_t dstprefixlen, skipped, srcprefixlen;
 
@@ -92,15 +94,15 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
 
         dirTimes = NULL;
         lastfilenofinished = 0;
-        ok = 1;
-        while (1) {
+        ok = true;
+        while (true) {
 
             /*
              * File header should be next in saveset.
              * It should have correct magic number and be next file in sequence.
              */
             try {
-                read_raw (&basehdr, (ulong_t)basehdr.name - (ulong_t)&basehdr, 0);
+                read_raw (&basehdr, (ulong_t)basehdr.name - (ulong_t)&basehdr, false);
             } catch (LostSSBlock *lssb) {
                 delete lssb;
                 goto badmedia;
@@ -121,8 +123,8 @@ badmedia:
 badmedialoop:
             try {
                 do {
-                    rblock = read_block (1);
-                    read_raw (&basehdr, (ulong_t)basehdr.name - (ulong_t)&basehdr, 0);
+                    rblock = read_block (true);
+                    read_raw (&basehdr, (ulong_t)basehdr.name - (ulong_t)&basehdr, false);
                 } while (memcmp (basehdr.magic, HEADER_MAGIC, 8) != 0);
             } catch (LostSSBlock *lssb) {
                 delete lssb;
@@ -133,7 +135,7 @@ badmedialoop:
             fprintf (stderr, "ftbackup: lost %d file%s due to bad saveset media\n", skipped, ((skipped == 1) ? "" : "s"));
 recovered:
             lastfileno = basehdr.fileno;
-            ok = 0;
+            ok = false;
 goodheader:
 
             /*
@@ -157,7 +159,7 @@ goodheader:
                  */
                 *hdr = basehdr;
                 try {
-                    read_raw (hdr->name, hdr->nameln, 0);
+                    read_raw (hdr->name, hdr->nameln, false);
                 } catch (LostSSBlock *lssb) {
                     delete lssb;
                     goto badmedia;
@@ -199,7 +201,7 @@ goodheader:
                 /*
                  * Call the processing funtion, skipping the data if not enabled.
                  */
-                setimes = 0;
+                setimes = false;
                 try {
                          if (S_ISREG (hdr->stmode)) thisok = read_regular   (hdr, dstname);
                     else if (S_ISDIR (hdr->stmode)) thisok = read_directory (hdr, dstname, &setimes);
@@ -269,10 +271,10 @@ goodheader:
  * @brief Restore a regular file's contents from the saveset.
  * @param hdr = backup header
  * @param dstname = where to restore the regular file to
- * @returns 1: success
- *          0: error writing file
+ * @returns true: success
+ *         false: error writing file
  */
-int FTBReader::read_regular (Header *hdr, char const *dstname)
+bool FTBReader::read_regular (Header *hdr, char const *dstname)
 {
     int fd, rc;
     struct stat statbuf;
@@ -284,19 +286,19 @@ int FTBReader::read_regular (Header *hdr, char const *dstname)
      * See if it's an hardlink to an earlier file in the saveset.
      */
     if (hdr->flags & HFL_HDLINK) {
-        read_raw (&oldfileno, sizeof oldfileno, 0);
+        read_raw (&oldfileno, sizeof oldfileno, false);
         if (dstname != NULL) {
             if ((oldfileno >= inodesused) || (inodesname[oldfileno] == NULL)) {
                 fprintf (stderr, "ftbackup: hardlink %s missing old file %u\n", hdr->name, oldfileno);
-                return 0;
+                return false;
             }
             if (opt_overwrite) unlink (dstname);
             if (link (inodesname[oldfileno], dstname) < 0) {
                 fprintf (stderr, "ftbackup: link(%s, %s) error: %s\n", inodesname[oldfileno], dstname, strerror (errno));
-                return 0;
+                return false;
             }
         }
-        return 1;
+        return true;
     }
 
     /*
@@ -336,7 +338,7 @@ int FTBReader::read_regular (Header *hdr, char const *dstname)
         for (rofs = 0; rofs < hdr->size; rofs += len) {
             len = hdr->size - rofs;
             if (len > sizeof buf) len = sizeof buf;
-            read_raw (buf, len, 1);
+            read_raw (buf, len, true);
             if (fd >= 0) {
                 for (wofs = 0; wofs < len; wofs += rc) {
                     rc = write (fd, buf + wofs, len - wofs);
@@ -377,15 +379,16 @@ int FTBReader::read_regular (Header *hdr, char const *dstname)
  * @brief Restore a directory's contents from the saveset.
  * @param hdr = backup header
  * @param dstname = where to restore the directory to
- * @returns 1: success
- *          0: error creating directory
- *         *setimes = 0: do not set atime/mtime
- *                    1: set atime/mtime later
+ * @returns true: success
+ *         false: error creating directory
+ *         *setimes = false: do not set atime/mtime
+ *                     true: set atime/mtime later
  */
-int FTBReader::read_directory (Header *hdr, char const *dstname, int *setimes)
+bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
 {
+    bool ok;
     char buf[32768], *nameptr;
-    int ient, ok, nents;
+    int ient, nents;
     struct dirent **names;
     uint32_t namelen;
     uint64_t len, ofs;
@@ -393,12 +396,12 @@ int FTBReader::read_directory (Header *hdr, char const *dstname, int *setimes)
     /*
      * Create the directory if it doesn't already exist.
      */
-    ok = 1;
+    ok = true;
     if (dstname != NULL) {
         *setimes = mkdir (dstname, hdr->stmode) >= 0;
         if (!*setimes && (errno != EEXIST)) {
             fprintf (stderr, "ftbackup: mkdir(%s) error: %s\n", dstname, strerror (errno));
-            ok = 0;
+            ok = false;
         }
     }
 
@@ -417,13 +420,13 @@ int FTBReader::read_directory (Header *hdr, char const *dstname, int *setimes)
             fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dstname, strerror (errno));
             names = NULL;
             nents = 0;
-            ok    = 0;
+            ok    = false;
         }
 
         // and we also want the directory time set back to the
         // saved time cuz it is going to look like it did back
         // then when the restore is complete
-        *setimes = 1;
+        *setimes = true;
     }
 
     try {
@@ -453,7 +456,7 @@ int FTBReader::read_directory (Header *hdr, char const *dstname, int *setimes)
             if (nameptr == NULL) {
                 len = hdr->size - ofs;
                 if (len > sizeof buf - namelen) len = sizeof buf - namelen;
-                read_raw (buf + namelen, len, 1);
+                read_raw (buf + namelen, len, true);
                 nameptr = buf;
                 ofs += len;
                 len += namelen;
@@ -524,59 +527,58 @@ int FTBReader::read_directory (Header *hdr, char const *dstname, int *setimes)
  * @brief Restore a symlink from the saveset.
  * @param hdr = backup header
  * @param dstname = where to restore the symlink to
- * @returns 1: success
- *          0: error creating symlink
+ * @returns true: success
+ *         false: error creating symlink
  */
-int FTBReader::read_symlink (Header *hdr, char const *dstname)
+bool FTBReader::read_symlink (Header *hdr, char const *dstname)
 {
     char *link;
 
     link = (char *) alloca (hdr->size + 1);
-    read_raw (link, hdr->size, 0);
+    read_raw (link, hdr->size, false);
     link[hdr->size] = 0;
 
     if (dstname != NULL) {
         if (opt_overwrite) unlink (dstname);
         if (symlink (link, dstname) < 0) {
             fprintf (stderr, "ftbackup: symlink(%s) error: %s\n", dstname, strerror (errno));
-            return 0;
+            return false;
         }
     }
-    return 1;
+    return true;
 }
 
 /**
  * @brief Restore a special file's contents from the saveset.
  * @param hdr = backup header
  * @param dstname = where to restore the special file to
- * @returns 1: success
- *          0: error creating node
- *         -1: unrecoverable media error
+ * @returns true: success
+ *         false: error creating node
  */
-int FTBReader::read_special (Header *hdr, char const *dstname)
+bool FTBReader::read_special (Header *hdr, char const *dstname)
 {
     dev_t rdev;
 
-    read_raw (&rdev, sizeof rdev, 0);
+    read_raw (&rdev, sizeof rdev, false);
 
     if (dstname != NULL) {
         if (opt_overwrite) unlink (dstname);
         if (mknod (dstname, hdr->stmode, rdev) < 0) {
             fprintf (stderr, "ftbackup: mknod(%s) error: %s\n", dstname, strerror (errno));
-            return 0;
+            return false;
         }
     }
-    return 1;
+    return true;
 }
 
 /**
  * @brief Read raw data from saveset block, unzipping it if necessary.
  * @param buf = where to return the data
  * @param len = number of bytes to return
- * @param zip = 1: data in saveset is compressed, unzip it
- *              0: data in saveset is uncompressed, copy it
+ * @param zip = true: data in saveset is compressed, unzip it
+ *             false: data in saveset is uncompressed, copy it
  */
-void FTBReader::read_raw (void *buf, uint32_t len, int zip)
+void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
 {
     int rc;
 
@@ -588,7 +590,7 @@ void FTBReader::read_raw (void *buf, uint32_t len, int zip)
          * Caller wants more data, so make sure we have some input to work with.
          */
         if (zstrm.avail_in == 0) {
-            read_block (0);
+            read_block (false);
         }
 
         /*
@@ -611,7 +613,7 @@ void FTBReader::read_raw (void *buf, uint32_t len, int zip)
                 zstrm.avail_out = ao;
                 zstrm.next_in   = ni;
                 zstrm.next_out  = no;
-                zisopen = 1;
+                zisopen = true;
             }
 
             /*
@@ -651,7 +653,7 @@ void FTBReader::read_raw (void *buf, uint32_t len, int zip)
                     zstrm.next_out  = NULL;
                     rc = inflateEnd (&zstrm);
                     if (rc != Z_OK) INTERR (inflateEnd, rc);
-                    zisopen = 0;
+                    zisopen = false;
                 }
 
                 /*
@@ -678,8 +680,8 @@ void FTBReader::read_raw (void *buf, uint32_t len, int zip)
 
 /**
  * @brief Read next data block from saveset, performing recovery if needed.
- * @param skipfh = 0: read whole block lastseqno+1
- *                 1: repeat until block with file header found
+ * @param skipfh = true: read whole block lastseqno+1
+ *                false: repeat until block with file header found
  * @returns pointer to block just read
  *          lastseqno incremented
  *          lastxorno possibly incremented
@@ -687,7 +689,7 @@ void FTBReader::read_raw (void *buf, uint32_t len, int zip)
  *          zstrm.avail_in = number of bytes available
  *          zstrm.next_in  = pointer to bytes within block
  */
-Block *FTBReader::read_block (int skipfh)
+Block *FTBReader::read_block (bool skipfh)
 {
     Block *rblock;
     uint32_t offs;
@@ -759,13 +761,13 @@ void FTBReader::read_first_block ()
     bigBlock    = NULL;
     bytesCopied = 0;
     miniBlock   = (Block *) alloca (MINBLOCKSIZE);
-    while (1) {
+    while (true) {
 
         /*
          * Keep reading until we get something of MINBLOCKSIZE.
          * Any error means get rid of bigBlock that we are trying to build.
          */
-        while (1) {
+        while (true) {
             miniOffset = readoffset;
             rc = wrapped_pread (ssfd, miniBlock, MINBLOCKSIZE, readoffset);
             readoffset += MINBLOCKSIZE;
@@ -1201,20 +1203,20 @@ static void nulltoslash (char *buf, int len)
  * @brief Remove an entry from a directory, recursively if necessary.
  * @param dirname = name of the directory
  * @param entname = name of entry to remove
- * @returns 1 iff the entry was removed
+ * @returns true iff the entry was removed
  */
-static int rmdirentry (char const *dirname, char const *entname)
+static bool rmdirentry (char const *dirname, char const *entname)
 {
     char name[strlen(dirname)+strlen(entname)+2];
     DIR *dir;
     int ndel;
     struct dirent *ent;
 
-    if ((strcmp (entname, ".") == 0) || (strcmp (entname, "..") == 0)) return 0;
+    if ((strcmp (entname, ".") == 0) || (strcmp (entname, "..") == 0)) return false;
 
     sprintf (name, "%s/%s", dirname, entname);
 
-    if (unlink (name) >= 0) return 1;
+    if (unlink (name) >= 0) return true;
 
     do {
         ndel = 0;

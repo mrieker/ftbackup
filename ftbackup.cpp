@@ -7,15 +7,15 @@
 #include "ftbwriter.h"
 
 static int cmd_backup (int argc, char **argv);
-static int write_nanos_to_file (uint64_t nanos, char const *name);
+static bool write_nanos_to_file (uint64_t nanos, char const *name);
 static uint64_t read_nanos_from_file (char const *name);
 
 static int cmd_diff (int argc, char **argv);
-static int diff_file (char const *path1, char const *path2);
-static int diff_regular (char const *path1, char const *path2);
-static int diff_directory (char const *path1, char const *path2);
-static int diff_symlink (char const *path1, char const *path2);
-static int diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2);
+static bool diff_file (char const *path1, char const *path2);
+static bool diff_regular (char const *path1, char const *path2);
+static bool diff_directory (char const *path1, char const *path2);
+static bool diff_symlink (char const *path1, char const *path2);
+static bool diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2);
 
 static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv);
@@ -94,7 +94,7 @@ static int cmd_backup (int argc, char **argv)
                 continue;
             }
             if (strcasecmp (argv[i], "-verbose") == 0) {
-                ftbwriter.opt_verbose = 1;
+                ftbwriter.opt_verbose = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-verbsec") == 0) {
@@ -173,7 +173,7 @@ usage:
  * @param nanos = number of nanoseconds since Jan 1, 1970 0:0:0 UTC (or 0 for current time)
  * @param name = name of file to write to
  */
-static int write_nanos_to_file (uint64_t nanos, char const *name)
+static bool write_nanos_to_file (uint64_t nanos, char const *name)
 {
     FILE *file;
     struct timespec structts;
@@ -191,7 +191,7 @@ static int write_nanos_to_file (uint64_t nanos, char const *name)
     file = fopen (name, "w");
     if (file == NULL) {
         fprintf (stderr, "ftbackup: error creating %s\n", name);
-        return 0;
+        return false;
     }
 
     fprintf (file, "%04d-%02d-%02d %02d:%02d:%02d.%09ld\n",
@@ -201,10 +201,10 @@ static int write_nanos_to_file (uint64_t nanos, char const *name)
 
     if (fclose (file) < 0) {
         fprintf (stderr, "ftbackup: error closing %s\n", name);
-        return 0;
+        return false;
     }
 
-    return 1;
+    return true;
 }
 
 /**
@@ -252,34 +252,35 @@ static int cmd_diff (int argc, char **argv)
     if (argc != 3) goto usage;
     dir1 = argv[1];
     dir2 = argv[2];
-    return diff_file (dir1, dir2);
+    return diff_file (dir1, dir2) ? EX_SSIO : EX_OK;
 
 usage:
     fprintf (stderr, "usage: ftbackup diff <path1> <path2>\n");
-    return 1;
+    return EX_CMD;
 }
 
-static int diff_file (char const *path1, char const *path2)
+static bool diff_file (char const *path1, char const *path2)
 {
-    int err, rc1, rc2;
+    bool err;
+    int rc1, rc2;
     struct stat stat1, stat2;
 
     rc1 = lstat (path1, &stat1);
     if (rc1 < 0) {
         printf ("diff file lstat %s error %d\n", path1, errno);
-        return 1;
+        return true;
     }
     rc2 = lstat (path2, &stat2);
     if (rc2 < 0) {
         printf ("diff file lstat %s error %d\n", path2, errno);
-        return 1;
+        return true;
     }
 
-    err = 0;
+    err = false;
     if (stat1.st_mode != stat2.st_mode) {
         printf ("diff file mode mismatch %s (0%o) vs %s (0%o)\n", path1, stat1.st_mode, path2, stat2.st_mode);
-        if ((stat1.st_mode ^ stat2.st_mode) & S_IFMT) return 1;
-        err = 1;
+        if ((stat1.st_mode ^ stat2.st_mode) & S_IFMT) return true;
+        err = true;
     }
 
     if ((stat1.st_mtim.tv_sec  != stat2.st_mtim.tv_sec) || 
@@ -287,7 +288,7 @@ static int diff_file (char const *path1, char const *path2)
         printf ("diff file mtime mismatch %s (%ld.%09ld) vs %s (%ld.%09ld)\n",
                 path1, stat1.st_mtim.tv_sec, stat1.st_mtim.tv_nsec,
                 path2, stat2.st_mtim.tv_sec, stat2.st_mtim.tv_nsec);
-        err = 1;
+        err = true;
     }
 
     if (S_ISREG (stat1.st_mode)) return err | diff_regular   (path1, path2);
@@ -296,47 +297,48 @@ static int diff_file (char const *path1, char const *path2)
     return err | diff_special (path1, path2, &stat1, &stat2);
 }
 
-static int diff_regular (char const *path1, char const *path2)
+static bool diff_regular (char const *path1, char const *path2)
 {
-    int err, fd1, fd2, rc1, rc2;
+    bool err;
+    int fd1, fd2, rc1, rc2;
     uint8_t buf1[32768], buf2[32768];
 
     fd1 = open (path1, O_RDONLY | O_NOATIME);
     if (fd1 < 0) {
         printf ("diff regular open %s error %d\n", path1, errno);
-        return 1;
+        return true;
     }
 
     fd2 = open (path2, O_RDONLY | O_NOATIME);
     if (fd2 < 0) {
         printf ("diff regular open %s error %d\n", path2, errno);
         close (fd1);
-        return 1;
+        return true;
     }
 
-    err = 0;
-    while (1) {
+    err = false;
+    while (true) {
         rc1 = read (fd1, buf1, sizeof buf1);
         if (rc1 < 0) {
             printf ("diff regular read %s error %d\n", path1, errno);
-            err = 1;
+            err = true;
             break;
         }
         rc2 = read (fd2, buf2, sizeof buf2);
         if (rc2 < 0) {
             printf ("diff regular read %s error %d\n", path2, errno);
-            err = 1;
+            err = true;
             break;
         }
         if (rc1 != rc2) {
             printf ("diff regular length mismatch %s vs %s\n", path1, path2);
-            err = 1;
+            err = true;
             break;
         }
         if (rc1 == 0) break;
         if (memcmp (buf1, buf2, rc1) != 0) {
             printf ("diff regular content mismatch %s vs %s\n", path1, path2);
-            err = 1;
+            err = true;
             break;
         }
     }
@@ -346,19 +348,20 @@ static int diff_regular (char const *path1, char const *path2)
     return err;
 }
 
-static int diff_directory (char const *path1, char const *path2)
+static bool diff_directory (char const *path1, char const *path2)
 {
+    bool err;
     char *file1, *file2, *name1, *name2;
-    int cmp, err, i, j, len1, len2, longest, nents1, nents2;
+    int cmp, i, j, len1, len2, longest, nents1, nents2;
     struct dirent **names1, **names2;
 
     nents1 = scandir (path1, &names1, NULL, alphasort);
     if (nents1 < 0) {
         printf ("diff directory scandir %s error %d\n", path1, errno);
-        return 1;
+        return true;
     }
 
-    err = 1;
+    err = true;
 
     nents2 = scandir (path2, &names2, NULL, alphasort);
     if (nents2 < 0) {
@@ -385,7 +388,7 @@ static int diff_directory (char const *path1, char const *path2)
     name2[len2++] = '/';
 
     cmp = 0;
-    err = 0;
+    err = false;
     for (i = j = 0; (i < nents1) || (j < nents2);) {
         file1 = (i < nents1) ? names1[i]->d_name : NULL;
         file2 = (j < nents2) ? names2[j]->d_name : NULL;
@@ -408,7 +411,7 @@ static int diff_directory (char const *path1, char const *path2)
         if ((j >= nents2) || (cmp < 0)) {
             printf ("diff directory only %s contains %s\n", path1, file1);
             i ++;
-            err = 1;
+            err = true;
             continue;
         }
 
@@ -416,7 +419,7 @@ static int diff_directory (char const *path1, char const *path2)
         if ((i >= nents1) || (cmp > 0)) {
             printf ("diff directory only %s contains %s\n", path2, file2);
             j ++;
-            err = 1;
+            err = true;
             continue;
         }
 
@@ -435,7 +438,7 @@ done:
     return err;
 }
 
-static int diff_symlink (char const *path1, char const *path2)
+static bool diff_symlink (char const *path1, char const *path2)
 {
     char buf1[32768], buf2[32768];
     int rc1, rc2;
@@ -443,34 +446,34 @@ static int diff_symlink (char const *path1, char const *path2)
     rc1 = readlink (path1, buf1, sizeof buf1);
     if (rc1 < 0) {
         printf ("diff symlink %s read error %d\n", path1, errno);
-        return 1;
+        return true;
     }
     rc2 = readlink (path2, buf2, sizeof buf2);
     if (rc2 < 0) {
         printf ("diff symlink %s read error %d\n", path2, errno);
-        return 1;
+        return true;
     }
 
     if (rc1 != rc2) {
         printf ("diff symlink length mismatch %s (%d) vs %s (%d)\n", path1, rc1, path2, rc2);
-        return 1;
+        return true;
     }
     if (memcmp (buf1, buf2, rc1) != 0) {
         printf ("diff symlink value mismatch %s (%*.*s) vs %s (%*.*s)\n",
                 path1, rc1, rc1, buf1, path2, rc2, rc2, buf2);
-        return 1;
+        return true;
     }
-    return 0;
+    return false;
 }
 
-static int diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2)
+static bool diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2)
 {
     if (stat1->st_rdev != stat2->st_rdev) {
         printf ("diff special rdev mismatch %s (0x%lX) vs %s (0x%lX)\n",
                 path1, stat1->st_rdev, path2, stat2->st_rdev);
-        return 1;
+        return true;
     }
-    return 0;
+    return false;
 }
 
 /**
@@ -511,7 +514,7 @@ static int cmd_list (int argc, char **argv)
 
 usage:
     fprintf (stderr, "usage: ftbackup list [-simrderrs <mod>] <saveset>\n");
-    return 1;
+    return EX_CMD;
 }
 
 char *FTBLister::maybe_output_listing (char *dstname, Header *hdr)
@@ -524,7 +527,7 @@ char *FTBLister::maybe_output_listing (char *dstname, Header *hdr)
  * @brief Restore from a saveset.
  */
 struct FTBRestorer : FTBReader {
-    int opt_verbose;
+    bool opt_verbose;
     int opt_verbsec;
     time_t lastverbsec;
 
@@ -544,12 +547,12 @@ static int cmd_restore (int argc, char **argv)
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
             if (strcasecmp (argv[i], "-incremental") == 0) {
-                ftbrestorer.opt_incrmntl  = 1;
-                ftbrestorer.opt_overwrite = 1;
+                ftbrestorer.opt_incrmntl  = true;
+                ftbrestorer.opt_overwrite = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-overwrite") == 0) {
-                ftbrestorer.opt_overwrite = 1;
+                ftbrestorer.opt_overwrite = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-prefixes") == 0) {
@@ -565,7 +568,7 @@ static int cmd_restore (int argc, char **argv)
                 continue;
             }
             if (strcasecmp (argv[i], "-verbose") == 0) {
-                ftbrestorer.opt_verbose = 1;
+                ftbrestorer.opt_verbose = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-verbsec") == 0) {
@@ -598,7 +601,7 @@ usage:
     fprintf (stderr, "                      default is '', ie, 'restore all files\n");
     fprintf (stderr, "        <dstprefix> = what to replace <srcprefix> part of filename with to construct output filename\n");
     fprintf (stderr, "                      default is './', ie, even if saveset has absolute pathnames, make relative to current directory\n");
-    return 1;
+    return EX_CMD;
 }
 
 char *FTBRestorer::maybe_output_listing (char *dstname, Header *hdr)
@@ -649,16 +652,16 @@ void FTBackup::print_header (FILE *out, Header *hdr)
 /**
  * @brief Check data (not XOR) block's validity.
  */
-int FTBackup::blockisvalid (Block *block)
+bool FTBackup::blockisvalid (Block *block)
 {
     Header *hdr;
     uint32_t bs, i;
 
-    if (!blockbaseisvalid (block)) return 0;
+    if (!blockbaseisvalid (block)) return false;
 
     if ((block->l2bs != l2bs) || (block->xorgc != xorgc) || (block->xorsc != xorsc) || (block->xorbc > xorsc)) {
         fprintf (stderr, "ftbackup: bad block size\n");
-        return 0;
+        return false;
     }
 
     if (block->hdroffs != 0) {
@@ -674,31 +677,31 @@ int FTBackup::blockisvalid (Block *block)
         }
     }
 
-    return 1;
+    return true;
 
 bbho:
     fprintf (stderr, "ftbackup: bad block hdroffs\n");
-    return 0;
+    return false;
 }
 
 // applies to both data and xor blocks
-int FTBackup::blockbaseisvalid (Block *block)
+bool FTBackup::blockbaseisvalid (Block *block)
 {
     uint32_t bs, chksum;
 
     if (memcmp (block->magic, BLOCK_MAGIC, 8) != 0) {
         fprintf (stderr, "ftbackup: bad block magic number\n");
-        return 0;
+        return false;
     }
 
     bs = 1 << l2bs;
     chksum = checksumdata (block, bs);
     if (chksum != 0) {
         fprintf (stderr, "ftbackup: bad block checksum\n");
-        return 0;
+        return false;
     }
 
-    return 1;
+    return true;
 }
 
 /**

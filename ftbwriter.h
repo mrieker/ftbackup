@@ -13,9 +13,9 @@ struct Main2ComprSlot {
 };
 
 struct FTBWriter : FTBackup {
+    bool opt_verbose;
     int ioptions;
     int ooptions;
-    int opt_verbose;
     int opt_verbsec;
     uint64_t opt_since;
 
@@ -25,11 +25,11 @@ struct FTBWriter : FTBackup {
 
 private:
     Block **xorblocks;
+    bool zisopen;
     char **inodesname;
     dev_t inodesdevno;
     ino_t *inodeslist;
     int ssfd;
-    int zisopen;
     time_t lastverbsec;
     uint32_t inodessize;
     uint32_t inodesused;
@@ -49,14 +49,14 @@ private:
     uint32_t        main2compr_next;
     uint32_t        main2compr_used;
 
-    int write_file (char const *path, struct stat const *dirstat);
-    int write_regular (Header *hdr, struct stat const *dirstat);
-    int write_directory (Header *hdr, struct stat const *statbuf);
-    int write_mountpoint (Header *hdr);
-    int write_symlink (Header *hdr);
-    int write_special (Header *hdr, dev_t strdev);
+    bool write_file (char const *path, struct stat const *dirstat);
+    bool write_regular (Header *hdr, struct stat const *dirstat);
+    bool write_directory (Header *hdr, struct stat const *statbuf);
+    bool write_mountpoint (Header *hdr);
+    bool write_symlink (Header *hdr);
+    bool write_special (Header *hdr, dev_t strdev);
     void write_header (Header *hdr);
-    void write_raw (void const *buf, uint32_t len, int hdr);
+    void write_raw (void const *buf, uint32_t len, bool hdr);
     void write_queue (void *buf, uint32_t len, int dty);
     static void *compr_thread_wrapper (void *ftbw);
     void *compr_thread ();
