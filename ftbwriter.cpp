@@ -503,7 +503,7 @@ void FTBWriter::write_header (Header *hdr)
     if (hdr->nameln > 0) {
         if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
             lastverbsec = time (NULL);
-            print_header (stderr, hdr);
+            print_header (stderr, hdr, hdr->name);
         }
     }
     write_raw (hdr, (ulong_t)(&hdr->name[hdr->nameln]) - (ulong_t)hdr, true);

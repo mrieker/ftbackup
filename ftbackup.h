@@ -87,7 +87,7 @@ struct FTBackup {
     uint8_t xorgc;
     uint8_t xorsc;
 
-    static void print_header (FILE *out, Header *hdr);
+    static void print_header (FILE *out, Header *hdr, char const *name);
     bool blockisvalid (Block *block);
     bool blockbaseisvalid (Block *block);
     static void xorblockdata (void *dst, void const *src, uint32_t nby);

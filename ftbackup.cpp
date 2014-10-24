@@ -519,7 +519,7 @@ usage:
 
 char *FTBLister::maybe_output_listing (char *dstname, Header *hdr)
 {
-    print_header (stdout, hdr);
+    print_header (stdout, hdr, hdr->name);
     return NULL;
 }
 
@@ -541,8 +541,8 @@ static int cmd_restore (int argc, char **argv)
     FTBRestorer ftbrestorer = FTBRestorer ();
     int i;
 
-    dstprefix = "./";
-    srcprefix = "";
+    dstprefix = NULL;
+    srcprefix = NULL;
     ssname    = NULL;
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
@@ -553,13 +553,6 @@ static int cmd_restore (int argc, char **argv)
             }
             if (strcasecmp (argv[i], "-overwrite") == 0) {
                 ftbrestorer.opt_overwrite = true;
-                continue;
-            }
-            if (strcasecmp (argv[i], "-prefixes") == 0) {
-                if (++ i >= argc) goto usage;
-                srcprefix = argv[i];
-                if (++ i >= argc) goto usage;
-                dstprefix = argv[i];
                 continue;
             }
             if (strcasecmp (argv[i], "-simrderrs") == 0) {
@@ -583,24 +576,32 @@ static int cmd_restore (int argc, char **argv)
             fprintf (stderr, "ftbackup: unknown option %s\n", argv[i]);
             goto usage;
         }
-        if (ssname != NULL) {
-            fprintf (stderr, "ftbackup: unknown argument %s\n", argv[i]);
-            goto usage;
+        if (ssname == NULL) {
+            ssname = argv[i];
+            continue;
         }
-        ssname = argv[i];
+        if (srcprefix == NULL) {
+            srcprefix = argv[i];
+            continue;
+        }
+        if (dstprefix == NULL) {
+            dstprefix = argv[i];
+            continue;
+        }
+        fprintf (stderr, "ftbackup: unknown argument %s\n", argv[i]);
+        goto usage;
     }
-    if (ssname == NULL) {
-        fprintf (stderr, "ftbackup: missing <saveset>\n");
+    if (dstprefix == NULL) {
+        fprintf (stderr, "ftbackup: missing required arguments\n");
         goto usage;
     }
     return ftbrestorer.read_saveset (ssname, srcprefix, dstprefix);
 
 usage:
-    fprintf (stderr, "usage: ftbackup restore [-incremental] [-overwrite] [-prefixes <srcprefix> <dstprefix>] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset>\n");
-    fprintf (stderr, "        <srcprefix> = restore files beginning with this prefix\n");
-    fprintf (stderr, "                      default is '', ie, 'restore all files\n");
+    fprintf (stderr, "usage: ftbackup restore [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix> <dstprefix>\n");
+    fprintf (stderr, "        <srcprefix> = restore only files beginning with this prefix\n");
+    fprintf (stderr, "                      use '' to restore all files\n");
     fprintf (stderr, "        <dstprefix> = what to replace <srcprefix> part of filename with to construct output filename\n");
-    fprintf (stderr, "                      default is './', ie, even if saveset has absolute pathnames, make relative to current directory\n");
     return EX_CMD;
 }
 
@@ -608,7 +609,7 @@ char *FTBRestorer::maybe_output_listing (char *dstname, Header *hdr)
 {
     if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
         lastverbsec = time (NULL);
-        print_header (stderr, hdr);
+        print_header (stderr, hdr, dstname);
     }
     return dstname;
 }
@@ -616,7 +617,7 @@ char *FTBRestorer::maybe_output_listing (char *dstname, Header *hdr)
 /**
  * @brief Print a backup header giving the details of a file in the saveset.
  */
-void FTBackup::print_header (FILE *out, Header *hdr)
+void FTBackup::print_header (FILE *out, Header *hdr, char const *name)
 {
     char ftype, prots[10];
     struct tm lcl;
@@ -643,10 +644,10 @@ void FTBackup::print_header (FILE *out, Header *hdr)
 
     sec = hdr->mtimns / 1000000000;
     lcl = *localtime (&sec);
-    fprintf (out, "%c%s  %6u/%6u  %12llu  %04d-%02d-%02d %02d:%02d:%02d  %s\n",
+    fprintf (out, "%c%s  %6u/%6u  %12llu  %04d-%02d-%02d %02d:%02d:%02d.%09lld  %s\n",
         ftype, prots, hdr->ownuid, hdr->owngid, hdr->size,
         lcl.tm_year + 1900, lcl.tm_mon + 1, lcl.tm_mday, lcl.tm_hour, lcl.tm_min, lcl.tm_sec,
-        hdr->name);
+        hdr->mtimns % 1000000000, name);
 }
 
 /**
