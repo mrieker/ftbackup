@@ -479,8 +479,8 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
              * Maybe we need to read more from the saveset.
              * If so, fill buf with as much as it can hold.
              *  hdr->size = total bytes in the directory file
-             *  namelen = 0: next byte is a 'same' byte
-             *         else: next byte is in a string after a 'same' byte
+             *  namelen = 0: next byte at ofs is a 'same' byte
+             *         else: next byte at ofs is in a string after a 'same' byte
              *               and namelen = number of good bytes at beginning of buf
              *  ofs = byte offset within directory file we will read next
              */
@@ -546,8 +546,6 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
             nameptr += namelen + 1;      // point to next 'same' byte
             namelen  = 0;                // in case nameptr is right at eob,
                                          // next thing in file is a 'same' byte
-
-            fprintf (stderr, "read_directory*: %s/%s\n", hdr->name, buf + 1);
 
             /*
              * We have a complete null-terminated name starting at buf[1].
