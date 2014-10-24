@@ -350,9 +350,9 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
 bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
 {
     bool ok;
-    char *buf, *path;
+    char *bbb, *buf, *path;
     char const *name;
-    int i, len, longest, nents;
+    int i, j, len, longest, nents, pathlen;
     struct dirent *de, **names;
 
     /*
@@ -365,18 +365,40 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     }
 
     /*
-     * Total up the length of all the filenames in the directory.
-     * Also get length of the longest name.
+     * Get length of the longest name including null terminator.
      */
     longest = 0;
-    hdr->size = 0;
     for (i = 0; i < nents; i ++) {
         de = names[i];
         name = de->d_name;
         if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
             len = strlen (name) + 1;
-            hdr->size += len;
             if (longest < len) longest = len;
+        }
+    }
+
+    /*
+     * Set up a buffer that will hold the directory path + the longest filename therein.
+     */
+    pathlen = strlen (hdr->name);
+    if ((pathlen > 0) && (hdr->name[pathlen-1] == '/')) -- pathlen;
+    path = (char *) alloca (pathlen + longest + 2);
+    memcpy (path, hdr->name, pathlen);
+    path[pathlen++] = '/';
+
+    /*
+     * Total up length needed for all filenames in the directory.
+     */
+    path[pathlen] = 0;
+    hdr->size = 0;
+    for (i = 0; i < nents; i ++) {
+        de = names[i];
+        name = de->d_name;
+        if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
+            for (j = 0; j < 255; j ++) if (path[pathlen+j] != name[j]) break;
+            len = strlen (name + j) + 1;
+            hdr->size += len + 1;
+            memcpy (path + pathlen + j, name + j, len);
         }
     }
 
@@ -392,29 +414,28 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
 
         /*
          * Write all the null terminated filenames out as the contents of the directory.
+         * Each name is written as:
+         *   <number-of-beginning-chars-same-as-last><different-chars-on-end><null>
          */
         buf = (char *) malloc (hdr->size);
         if (buf == NULL) NOMEM ();
-        len = 0;
+        bbb = buf;
+        path[pathlen] = 0;
         for (i = 0; i < nents; i ++) {
             de = names[i];
             name = de->d_name;
             if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
-                strcpy (buf + len, name);
-                len += strlen (buf + len) + 1;
+                for (j = 0; j < 255; j ++) if (path[pathlen+j] != name[j]) break;
+                len = strlen (name + j) + 1;
+                *(bbb ++) = j;
+                memcpy (bbb, name + j, len);
+                bbb += len;
+                memcpy (path + pathlen + j, name + j, len);
             }
         }
-        if (len > 0) write_queue (buf, len, 1);
+        if ((ulong_t) (bbb - buf) != hdr->size) abort ();
+        if (bbb > buf) write_queue (buf, bbb - buf, 1);
     }
-
-    /*
-     * Set up a buffer that will hold the directory path + the longest filename therein.
-     */
-    len = strlen (hdr->name);
-    if ((len > 0) && (hdr->name[len-1] == '/')) -- len;
-    path = (char *) alloca (len + longest + 2);
-    memcpy (path, hdr->name, len);
-    path[len++] = '/';
 
     /*
      * Write all the files in the directory out to the saveset.
@@ -424,7 +445,7 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
         de = names[i];
         name = de->d_name;
         if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
-            strcpy (path + len, name);
+            strcpy (path + pathlen, name);
             ok &= write_file (path, statbuf);
         }
         free (de);

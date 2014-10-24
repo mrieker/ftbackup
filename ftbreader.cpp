@@ -417,8 +417,8 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
     char buf[32768], *nameptr;
     int ient, nents;
     struct dirent **names;
-    uint32_t namelen;
-    uint64_t len, ofs;
+    uint32_t len, namelen, numsame, preserve;
+    uint64_t ofs;
 
     /*
      * Create the directory if it doesn't already exist.
@@ -451,7 +451,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
         }
 
         // and we also want the directory time set back to the
-        // saved time cuz it is going to look like it did back
+        // saved time cuz it is going to look like it looked back
         // then when the restore is complete
         *setimes = true;
     }
@@ -466,49 +466,95 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
          * the existing directory so the existing directory will end up 
          * matching the backed up directory.
          *
-         * For non-incremental restores, just skip over the backed up contents.
+         * For excremental restores, just skip over the backed up contents.
          */
         ient    = 0;
+        len     = 0;
         namelen = 0;
-        nameptr = NULL;
+        nameptr = buf;
         ofs     = 0;
-        while ((ofs < hdr->size) || (nameptr != NULL)) {
+        while ((ofs < hdr->size) || (nameptr < buf + len)) {
 
             /*
              * Maybe we need to read more from the saveset.
+             * If so, fill buf with as much as it can hold.
              *  hdr->size = total bytes in the directory file
-             *  namelen = length of partial name in beginning of buf
+             *  namelen = 0: next byte is a 'same' byte
+             *         else: next byte is in a string after a 'same' byte
+             *               and namelen = number of good bytes at beginning of buf
              *  ofs = byte offset within directory file we will read next
              */
-            if (nameptr == NULL) {
-                len = hdr->size - ofs;
-                if (len > sizeof buf - namelen) len = sizeof buf - namelen;
-                read_raw (buf + namelen, len, true);
+            if (nameptr >= buf + len) {
+
+                // preserve any filename bytes already at beginning of buffer
+                preserve = namelen;
+                if ((preserve == 0) && (ofs > 0)) {
+                    preserve = strnlen (buf + 1, 255) + 1;
+                }
+                if (preserve >= sizeof buf) abort ();
+
+                // how many bytes to end of buffer
+                // but not more than are in directory
+                len = sizeof buf - preserve;
+                if (len > hdr->size - ofs) len = hdr->size - ofs;
+
+                // read bytes, being sure to preserve what is needed
+                read_raw (buf + preserve, len, true);
+                ofs += len;       // how many bytes just read in
+                len += preserve;  // all bytes in buffer
+
+                // point to 'same' byte at beginning of buf
+                // it must always be 0 cuz we don't have any bytes before it to splice
+                // eg, if the very first thing in the directory were <2>cdef, there's
+                // no way to know what the two characters before cdef are.
                 nameptr = buf;
-                ofs += len;
-                len += namelen;
+                if (*nameptr != 0) abort ();
+
+                // if we started reading right at a 'same' byte, we preserved up to 255
+                // bytes of the previous filename, so just point at the 'same' byte.
+                if (namelen == 0) {
+                    nameptr += preserve;
+                }
+
+                // no matter what, at this point nameptr points to the 'same' byte
+                // of the next name to process
             }
 
             /*
              * There is a name in buf starting at nameptr.
+             * It points to a string of the form:
+             *  <number-of-beginning-chars-same-as-last><different-chars-on-end><null>
+             *
              * Find the end of the name if any.
              * If no end, save the part we have and read next block.
-             *  nameptr = where in buf the name starts
+             *
+             *  nameptr = where in buf the 'same' byte is
              *  len = total number of bytes in buf
+             *  buf[0] = 0
              */
+            numsame = (uint8_t) *(nameptr ++);
             namelen = strnlen (nameptr, buf + len - nameptr);
+            if (numsame + 1 + namelen > sizeof buf) abort ();
+            memmove (buf + numsame + 1, nameptr, namelen);
             if (namelen >= buf + len - nameptr) {
-                memcpy (buf, nameptr, namelen);
-                nameptr = NULL;
-                continue;
+                namelen += numsame + 1;  // point just past last good char at beg of buf
+                nameptr  = buf + len;    // cause next loop to read from directory
+                continue;                // read more from directory
             }
+            buf[numsame+1+namelen] = 0;
+
+            nameptr += namelen + 1;      // point to next 'same' byte
+            namelen  = 0;                // in case nameptr is right at eob,
+                                         // next thing in file is a 'same' byte
+
+            fprintf (stderr, "read_directory*: %s/%s\n", hdr->name, buf + 1);
 
             /*
-             * We have a complete name.
+             * We have a complete null-terminated name starting at buf[1].
              * Delete any entries in the existing directory that are lower than the
              * backed up name.
              */
-            while ((ient < nents) && (strcmp (names[ient]->d_name, nameptr) < 0)) {
+            while ((ient < nents) && (strcmp (names[ient]->d_name, buf + 1) < 0)) {
                 rmdirentry (dstname, names[ient]->d_name);
                 free (names[ient++]);
             }
@@ -516,18 +562,13 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
             /*
              * Skip over the matching name in the existing directory if it is there.
              */
-            while ((ient < nents) && (strcmp (names[ient]->d_name, nameptr) == 0)) {
+            while ((ient < nents) && (strcmp (names[ient]->d_name, buf + 1) == 0)) {
                 free (names[ient++]);
             }
-
-            /*
-             * Point to next name in backed up directory buf.
-             */
-            nameptr += ++ namelen;
         }
 
         /*
-         * Delete any existing directory entries beyond the end of those in the backup,
+         * Delete any existing directory entries beyond the end of those in the backup.
          */
         while (ient < nents) {
             rmdirentry (dstname, names[ient]->d_name);
