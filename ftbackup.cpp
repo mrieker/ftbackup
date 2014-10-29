@@ -19,8 +19,8 @@ static bool diff_special (char const *path1, char const *path2, struct stat *sta
 
 static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv);
-
 static int cmd_version (int argc, char **argv);
+static int cmd_xorvfy (int argc, char **argv);
 
 int main (int argc, char **argv)
 {
@@ -33,6 +33,7 @@ int main (int argc, char **argv)
         if (strcasecmp (argv[1], "list")    == 0) return cmd_list    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "version") == 0) return cmd_version (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "xorvfy")  == 0) return cmd_xorvfy  (argc - 1, argv + 1);
         fprintf (stderr, "ftbackup: unknown command %s\n", argv[1]);
     }
     fprintf (stderr, "usage: ftbackup backup ...\n");
@@ -40,6 +41,7 @@ int main (int argc, char **argv)
     fprintf (stderr, "       ftbackup list ...\n");
     fprintf (stderr, "       ftbackup restore ...\n");
     fprintf (stderr, "       ftbackup version\n");
+    fprintf (stderr, "       ftbackup xorvfy ...\n");
     return EX_CMD;
 }
 
@@ -233,7 +235,7 @@ static uint64_t read_nanos_from_file (char const *name)
         fprintf (stderr, "ftbackup: error opening %s\n", name);
         return 0;
     }
-    if (fscanf (file, "%d-%d-%d %d:%d:%d.%u", 
+    if (fscanf (file, "%d-%d-%d %d:%d:%d.%u",
         &structtm.tm_year, &structtm.tm_mon, &structtm.tm_mday,
         &structtm.tm_hour, &structtm.tm_min, &structtm.tm_sec, &nanos) != 7) {
         fprintf (stderr, "ftbackup: error reading %s\n", name);
@@ -288,7 +290,7 @@ static bool diff_file (char const *path1, char const *path2)
         err = true;
     }
 
-    if ((stat1.st_mtim.tv_sec  != stat2.st_mtim.tv_sec) || 
+    if ((stat1.st_mtim.tv_sec  != stat2.st_mtim.tv_sec) ||
         (stat1.st_mtim.tv_nsec != stat2.st_mtim.tv_nsec)) {
         printf ("diff file mtime mismatch %s (%ld.%09ld) vs %s (%ld.%09ld)\n",
                 path1, stat1.st_mtim.tv_sec, stat1.st_mtim.tv_nsec,
@@ -626,6 +628,116 @@ static int cmd_version (int argc, char **argv)
 {
     printf ("%s %s%s\n", GITCOMMITHASH, GITCOMMITDATE, (GITCOMMITCLEAN ? "" : " (dirty)"));
     return 0;
+}
+
+/**
+ * @brief Verify the XOR blocks of a saveset.
+ */
+static int cmd_xorvfy (int argc, char **argv)
+{
+    char const *name;
+    Block baseblock, *block, *xorblk, **xorblocks;
+    int fd, rc;
+    uint32_t bs, lastseqno, lastxorno, xorgn;
+    uint64_t rdpos;
+    uint8_t *xorcounts;
+
+    if (argc != 2) {
+        fprintf (stderr, "usage: ftbackup xorvfy <saveset>\n");
+        return EX_CMD;
+    }
+
+    name = argv[1];
+    fd = open (name, O_RDONLY);
+    if (fd < 0) {
+        fprintf (stderr, "open(%s) error: %s\n", name, strerror (errno));
+        return EX_SSIO;
+    }
+
+    rc = read (fd, &baseblock, sizeof baseblock);
+    if (rc != sizeof baseblock) {
+        if (rc < 0) {
+            fprintf (stderr, "read(%s) error: %s\n", name, strerror (errno));
+            return EX_SSIO;
+        }
+        fprintf (stderr, "read(%s) too short\n", name);
+        return EX_SSIO;
+    }
+
+    bs = 1 << baseblock.l2bs;
+
+    block = (Block *) malloc (bs);
+    xorblocks = (Block **) malloc (baseblock.xorgc * sizeof *xorblocks);
+    for (xorgn = 0; xorgn < baseblock.xorgc; xorgn ++) xorblocks[xorgn] = (Block *) calloc (1, bs);
+    xorcounts = (uint8_t *) calloc (baseblock.xorgc, sizeof *xorcounts);
+
+    lastseqno = 0;
+    lastxorno = 0;
+    rdpos = 0;
+
+    while (((rc = pread (fd, block, bs, rdpos)) >= 0) && ((uint32_t) rc == bs)) {
+        if (memcmp (block->magic, BLOCK_MAGIC, 8) != 0) {
+            fprintf (stderr, "%llu: bad block magic\n", rdpos);
+            return EX_SSIO;
+        }
+        if (block->xorno == 0) {
+            if ((block->l2bs != baseblock.l2bs) || (block->xorgc != baseblock.xorgc) || (block->xorsc != baseblock.xorsc)) {
+                fprintf (stderr, "%llu: bad numbers %u,%u,%u, expect %u,%u,%u in seqno %u\n",
+                        rdpos, block->l2bs, block->xorgc, block->xorsc,
+                        baseblock.l2bs, baseblock.xorgc, baseblock.xorsc, block->seqno);
+                return EX_SSIO;
+            }
+            if (++ lastseqno != block->seqno) {
+                fprintf (stderr, "%llu: bad seqno %u\n", rdpos, block->seqno);
+                return EX_SSIO;
+            }
+            xorgn = (block->seqno - 1) % baseblock.xorgc;
+            FTBackup::xorblockdata (xorblocks[xorgn], block, bs);
+            xorcounts[xorgn] ++;
+        } else {
+            if (++ lastxorno != block->xorno) {
+                fprintf (stderr, "%llu: bad xorno %u\n", rdpos, block->xorno);
+                return EX_SSIO;
+            }
+            xorgn = (block->xorno - 1) % baseblock.xorgc;
+            if (xorcounts[xorgn] != block->xorbc) {
+                fprintf (stderr, "%llu: bad xorbc %u\n", rdpos, block->xorbc);
+                return EX_SSIO;
+            }
+            xorblk = xorblocks[xorgn];
+            FTBackup::xorblockdata (xorblk, block, bs);
+            for (rc = 0; rc < (uint8_t *)block + bs - block->data; rc ++) {
+                if (xorblk->data[rc] != 0) {
+                    fprintf (stderr, "%llu: bad xor data at xorno %u[%d]\n", rdpos, block->xorno, rc);
+                    return EX_SSIO;
+                }
+            }
+
+            memset (xorblk, 0, bs);
+            xorcounts[xorgn] = 0;
+        }
+
+        rdpos += bs;
+    }
+
+    if (rc < 0) {
+        fprintf (stderr, "%llu: pread() error: %s\n", rdpos, strerror (errno));
+        return EX_SSIO;
+    }
+    if (rc != 0) {
+        fprintf (stderr, "%llu: pread() only %d bytes of %u\n", rdpos, rc, bs);
+        return EX_SSIO;
+    }
+
+    for (xorgn = 0; xorgn < baseblock.xorgc; xorgn ++) {
+        if (xorcounts[xorgn] != 0) {
+            fprintf (stderr, "%llu: missing end xor block group %u\n", rdpos, xorgn);
+            return EX_SSIO;
+        }
+    }
+
+    fprintf (stderr, "success!\n");
+    return EX_OK;
 }
 
 /**
