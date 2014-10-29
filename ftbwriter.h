@@ -65,6 +65,7 @@ private:
     static void *write_thread_wrapper (void *ftbw);
     void *write_thread ();
     void flush_xor_blocks ();
+    void verify_last_xor_span ();
 };
 
 #endif

@@ -60,13 +60,6 @@ struct Block {
     uint8_t     data[0];
 };
 
-struct DirTime {
-    DirTime *next;
-    struct timespec times[2];
-    uint16_t nameln;
-    char name[1];
-};
-
 struct Header {
     char        magic[8];   // magic number
     uint64_t    mtimns;     // data mod time

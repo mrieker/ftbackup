@@ -691,21 +691,26 @@ static int cmd_xorvfy (int argc, char **argv)
                 fprintf (stderr, "%llu: bad seqno %u\n", rdpos, block->seqno);
                 return EX_SSIO;
             }
-            xorgn = (block->seqno - 1) % baseblock.xorgc;
-            FTBackup::xorblockdata (xorblocks[xorgn], block, bs);
+            xorgn  = (block->seqno - 1) % baseblock.xorgc;
+            xorblk = xorblocks[xorgn];
+            //if (xorgn == 0) fprintf (stderr, "xorvfy*: seqno %6u data %02X xor before %02X\n", block->seqno, block->data[0], xorblk->data[0]);
+            FTBackup::xorblockdata (xorblk, block, bs);
+            //if (xorgn == 0) fprintf (stderr, "xorvfy*:                      xor  after %02X\n", xorblk->data[0]);
             xorcounts[xorgn] ++;
         } else {
             if (++ lastxorno != block->xorno) {
                 fprintf (stderr, "%llu: bad xorno %u\n", rdpos, block->xorno);
                 return EX_SSIO;
             }
-            xorgn = (block->xorno - 1) % baseblock.xorgc;
+            xorgn  = (block->xorno - 1) % baseblock.xorgc;
+            xorblk = xorblocks[xorgn];
             if (xorcounts[xorgn] != block->xorbc) {
                 fprintf (stderr, "%llu: bad xorbc %u\n", rdpos, block->xorbc);
                 return EX_SSIO;
             }
-            xorblk = xorblocks[xorgn];
+            //if (xorgn == 0) fprintf (stderr, "xorvfy*: xorno %6u data %02X xor before %02X\n", block->xorno, block->data[0], xorblk->data[0]);
             FTBackup::xorblockdata (xorblk, block, bs);
+            //if (xorgn == 0) fprintf (stderr, "xorvfy*:                      xor  after %02X\n", xorblk->data[0]);
             for (rc = 0; rc < (uint8_t *)block + bs - block->data; rc ++) {
                 if (xorblk->data[rc] != 0) {
                     fprintf (stderr, "%llu: bad xor data at xorno %u[%d]\n", rdpos, block->xorno, rc);
@@ -839,21 +844,12 @@ bool FTBackup::blockbaseisvalid (Block *block)
  */
 void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
 {
-    uint64_t temp;
     nby /= 8;
-    asm (
-        "1:                 \n"
-        "   movq    (%1),%0 \n"
-        "   addq    $8,%1   \n"
-        "   xorq    %0,(%2) \n"
-        "   addq    $8,%2   \n"
-        "   decl    %3      \n"
-        "   jne     1b      \n"
-        : "=r" (temp),
-          "+r" (src),
-          "+r" (dst),
-          "+r" (nby)
-        : : "cc", "memory");
+    do {
+        *(uint64_t *)dst ^= *(uint64_t *)src;
+        dst = (void *) ((ulong_t) dst + 8);
+        src = (void *) ((ulong_t) src + 8);
+    } while (-- nby > 0);
 }
 
 /**
@@ -866,15 +862,9 @@ uint32_t FTBackup::checksumdata (void const *src, uint32_t nby)
 {
     uint32_t sum = 0;
     nby /= 4;
-    asm (
-        "1:                 \n"
-        "   addl    (%1),%0 \n"
-        "   addq    $4,%1   \n"
-        "   decl    %2      \n"
-        "   jne     1b      \n"
-        : "+r" (sum),
-          "+r" (src),
-          "+r" (nby)
-        : : "cc", "memory");
+    do {
+        sum += *(uint32_t *)src;
+        src  = (void const *) ((ulong_t) src + 4);
+    } while (-- nby > 0);
     return sum;
 }

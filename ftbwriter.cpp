@@ -782,8 +782,8 @@ void *FTBWriter::write_thread ()
 
     bs = 1 << l2bs;
 
-    xorblocks = (Block **) alloca (xorgc * sizeof *xorblocks);
-    memset (xorblocks, 0, xorgc * sizeof *xorblocks);
+    xorblocks = (Block **) calloc (xorgc, sizeof *xorblocks);
+    if (xorblocks == NULL) NOMEM ();
 
     while (true) {
 
@@ -850,6 +850,7 @@ void *FTBWriter::write_thread ()
     }
 
     flush_xor_blocks ();
+    free (xorblocks);
     xorblocks = NULL;
 
     return NULL;
@@ -888,4 +889,154 @@ void FTBWriter::flush_xor_blocks ()
         }
     }
     lastxorno += xorgc;
+
+    //verify_last_xor_span ();
+}
+
+/**
+ * @brief Verify the XOR data in the span just flushed.
+ *        Needs saveset opened with O_RDWR.
+ */
+void FTBWriter::verify_last_xor_span ()
+{
+    Block *block, *xorblk, **xorblocks;
+    int rc;
+    uint32_t bs, ourlastseqno, ourlastxorno, xorgn;
+    uint64_t rdpos;
+    uint8_t *xorcounts;
+
+    /*
+     * Allocate needed buffers and zero out xor values.
+     * Block buffer must be page aligned in case of O_DIRECT.
+     */
+    bs = 1 << l2bs;
+    rc = posix_memalign ((void **)&block, PAGESIZE, bs);
+    if (rc != 0) NOMEM ();
+    xorblocks = (Block **) alloca (xorgc * sizeof *xorblocks);
+    for (xorgn = 0; xorgn < xorgc; xorgn ++) {
+        xorblocks[xorgn] = (Block *) calloc (1, bs);
+        if (xorblocks[xorgn] == NULL) NOMEM ();
+    }
+    xorcounts = (uint8_t *) alloca (xorgc * sizeof *xorcounts);
+    memset (xorcounts, 0, xorgc * sizeof *xorcounts);
+
+    /*
+     * Calculate XOR block number just before the span we want to verify.
+     * From that calculate the byte position at start of the span we want to verify.
+     *
+     *      ... (1)(2) ... (3)(4)
+     *  ourlastxorno^  ^ ^     ^lastxorno
+     *                 ^-^span to verify
+     */
+    ourlastxorno = lastxorno - xorgc;
+    ourlastseqno = ourlastxorno * xorsc;
+    rdpos = ((uint64_t) ourlastxorno * (xorsc + 1)) << l2bs;
+
+    /*
+     * Read through blocks to end of file (or an error).
+     */
+    while (((rc = pread (ssfd, block, bs, rdpos)) >= 0) && ((uint32_t) rc == bs)) {
+
+        /*
+         * All blocks have the magic number.
+         */
+        if (memcmp (block->magic, BLOCK_MAGIC, 8) != 0) {
+            fprintf (stderr, "%llu: bad block magic\n", rdpos);
+            exit (EX_SSIO);
+        }
+        if (block->xorno == 0) {
+
+            /*
+             * Check other stuff in data block header.
+             */
+            if ((block->l2bs != l2bs) || (block->xorgc != xorgc) || (block->xorsc != xorsc)) {
+                fprintf (stderr, "%llu: bad numbers %u,%u,%u, expect %u,%u,%u in seqno %u\n",
+                        rdpos, block->l2bs, block->xorgc, block->xorsc,
+                        l2bs, xorgc, xorsc, block->seqno);
+                exit (EX_SSIO);
+            }
+
+            if (block->seqno != ++ ourlastseqno) {
+                fprintf (stderr, "%llu: bad seqno %u\n", rdpos, block->seqno);
+                exit (EX_SSIO);
+            }
+
+            /*
+             * XOR the block into XOR block.
+             */
+            xorgn  = (block->seqno - 1) % xorgc;
+            xorblk = xorblocks[xorgn];
+            FTBackup::xorblockdata (xorblk, block, bs);
+
+            /*
+             * One more data block has been XOR'd into the XOR block.
+             */
+            xorcounts[xorgn] ++;
+        } else {
+
+            /*
+             * XOR block, make sure it is correct number.
+             */
+            if (block->xorno != ++ ourlastxorno) {
+                fprintf (stderr, "%llu: bad xorno %u\n", rdpos, block->xorno);
+                exit (EX_SSIO);
+            }
+
+            /*
+             * Make sure it has correct number of data blocks noted.
+             */
+            xorgn  = (block->xorno - 1) % xorgc;
+            xorblk = xorblocks[xorgn];
+            if (xorcounts[xorgn] != block->xorbc) {
+                fprintf (stderr, "%llu: bad xorbc %u\n", rdpos, block->xorbc);
+                exit (EX_SSIO);
+            }
+
+            /*
+             * Verify that the data bytes match.
+             */
+            if (memcmp (block->data, xorblk->data, (uint8_t *)block + bs - block->data) != 0) {
+                fprintf (stderr, "%llu: bad xor data at xorno %u\n", rdpos, block->xorno);
+                exit (EX_SSIO);
+            }
+
+            /*
+             * Zero stuff out for next span.
+             */
+            memset (xorblk, 0, bs);
+            xorcounts[xorgn] = 0;
+        }
+
+        rdpos += bs;
+    }
+
+    if (rc < 0) {
+        fprintf (stderr, "%llu: pread() error: %s\n", rdpos, strerror (errno));
+        exit (EX_SSIO);
+    }
+
+    if (rc != 0) {
+        fprintf (stderr, "%llu: pread() only %d bytes of %u\n", rdpos, rc, bs);
+        exit (EX_SSIO);
+    }
+
+    for (xorgn = 0; xorgn < xorgc; xorgn ++) {
+        if (xorcounts[xorgn] != 0) {
+            fprintf (stderr, "%llu: missing end xor block group %u\n", rdpos, xorgn);
+            exit (EX_SSIO);
+        }
+    }
+
+    if (ourlastxorno != lastxorno) {
+        fprintf (stderr, "%llu: had xorno %u but was expecting %u\n", rdpos, ourlastxorno, lastxorno);
+        exit (EX_SSIO);
+    }
+
+    /*
+     * Free malloc()d memory.
+     */
+    free (block);
+    for (xorgn = 0; xorgn < xorgc; xorgn ++) {
+        free (xorblocks[xorgn]);
+    }
 }

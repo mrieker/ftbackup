@@ -2,6 +2,14 @@
 #include "ftbackup.h"
 #include "ftbreader.h"
 
+struct DirTime {
+    DirTime *next;
+    uint64_t atimns;
+    uint64_t mtimns;
+    uint16_t nameln;
+    char     name[1];
+};
+
 struct EndOfSSFile {
 };
 
@@ -12,7 +20,8 @@ struct LostSSBlock {
 
 static void slashtonull (char *buf, int len);
 static void nulltoslash (char *buf, int len);
-static bool rmdirentry (char const *dirname, char const *entname);
+static void updatetimes (char const *name, uint64_t atimns, uint64_t mtimns);
+static bool rmdirentry  (char const *dirname, char const *entname);
 
 FTBReader::FTBReader ()
 {
@@ -90,12 +99,11 @@ FTBReader::~FTBReader ()
 int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char const *dstprefix)
 {
     Block *rblock;
-    bool ok, setimes, thisok;
+    bool needhdr, ok, setimes, thisok;
     char *srcprefixnul;
     DirTime *dirTime, *dirTimes;
     Header basehdr;
     int cmp, lastfilenofinished;
-    struct timespec times[2];
     uint32_t dstprefixlen, skipped, srcprefixlen;
 
     dstprefixlen = strlen (dstprefix);
@@ -120,165 +128,153 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
 
         dirTimes = NULL;
         lastfilenofinished = 0;
+        needhdr = true;
         ok = true;
         while (true) {
-
-            /*
-             * File header should be next in saveset.
-             * It should have correct magic number and be next file in sequence.
-             */
             try {
-                read_raw (&basehdr, (ulong_t)basehdr.name - (ulong_t)&basehdr, false);
-            } catch (LostSSBlock *lssb) {
-                delete lssb;
-                goto badmedia;
-            }
-            if (memcmp (basehdr.magic, HEADER_MAGIC, 8) != 0) {
-                fprintf (stderr, "ftbackup: bad header magic number\n");
-                goto badmedia;
-            }
-            if (basehdr.fileno == ++ lastfileno) goto goodheader;
-            fprintf (stderr, "ftbackup: bad header file number, have %u, expect %u\n", basehdr.fileno, lastfileno);
-            goto recovered;
 
-            /*
-             * Some unrecoverable media error, skip to next block with a valid file header.
-             */
-badmedia:
-            fprintf (stderr, "ftbackup: searching saveset for next file header\n");
-badmedialoop:
-            try {
-                do {
-                    rblock = read_block (true);
+                /*
+                 * File header should be next in saveset.
+                 * It should have correct magic number and be next file in sequence.
+                 */
+                if (needhdr) {
                     read_raw (&basehdr, (ulong_t)basehdr.name - (ulong_t)&basehdr, false);
-                } while (memcmp (basehdr.magic, HEADER_MAGIC, 8) != 0);
-            } catch (LostSSBlock *lssb) {
-                delete lssb;
-                goto badmedialoop;
-            }
-            fprintf (stderr, "ftbackup: found file header in block %u at offset %u\n", rblock->seqno, rblock->hdroffs);
-            skipped = basehdr.fileno - lastfilenofinished - 1;
-            fprintf (stderr, "ftbackup: lost %d file%s due to bad saveset media\n", skipped, ((skipped == 1) ? "" : "s"));
-recovered:
-            lastfileno = basehdr.fileno;
-            ok = false;
-goodheader:
-
-            /*
-             * Filename length of 0 is the end-of-saveset marker.
-             */
-            if (basehdr.nameln == 0) break;
-
-            /*
-             * It's a file (or directory or something), restore it.
-             */
-            int srcnamelen = basehdr.nameln;
-            int dstnamelen = srcnamelen - srcprefixlen + dstprefixlen;
-            if (dstnamelen <= 0) dstnamelen = 1;
-            {
-                char dstnamebuf[dstnamelen], *dstname;
-                uint8_t hdrbuf[srcnamelen+sizeof basehdr];
-                Header *hdr = (Header *)hdrbuf;
+                    if (memcmp (basehdr.magic, HEADER_MAGIC, 8) != 0) {
+                        fprintf (stderr, "ftbackup: bad header magic number\n");
+                        throw new LostSSBlock (0);
+                    }
+                    if (++ lastfileno != basehdr.fileno) {
+                        fprintf (stderr, "ftbackup: bad header file number, have %u, expect %u\n", basehdr.fileno, lastfileno);
+                        ok = false;
+                    }
+                }
+                lastfileno = basehdr.fileno;
+                needhdr = true;
 
                 /*
-                 * Read the whole header in, including the filename with terminating null.
+                 * Filename length of 0 is the end-of-saveset marker.
                  */
-                *hdr = basehdr;
-                try {
+                if (basehdr.nameln == 0) break;
+
+                /*
+                 * It's a file (or directory or something), restore it.
+                 */
+                int srcnamelen = basehdr.nameln;
+                int dstnamelen = srcnamelen - srcprefixlen + dstprefixlen;
+                if (dstnamelen <= 0) dstnamelen = 1;
+                {
+                    char dstnamebuf[dstnamelen], *dstname;
+                    uint8_t hdrbuf[srcnamelen+sizeof basehdr];
+                    Header *hdr = (Header *)hdrbuf;
+
+                    /*
+                     * Read the whole header in, including the filename with terminating null.
+                     */
+                    *hdr = basehdr;
                     read_raw (hdr->name, hdr->nameln, false);
-                } catch (LostSSBlock *lssb) {
-                    delete lssb;
-                    goto badmedia;
-                }
 
-                /*
-                 * See if file is selected and create destination filename.
-                 */
-                dstname = NULL;
-                slashtonull (hdr->name, hdr->nameln - 1);
-                cmp = memcmp (hdr->name, srcprefixnul, srcprefixlen);
-                nulltoslash (hdr->name, hdr->nameln - 1);
-                if (cmp >  0) break;
-                if (cmp == 0) {
-                    dstname = dstnamebuf;
-                    memcpy (dstnamebuf, dstprefix, dstprefixlen);
-                    memcpy (dstnamebuf + dstprefixlen, hdr->name + srcprefixlen, srcnamelen - srcprefixlen);
-                }
+                    /*
+                     * See if file is selected and create destination filename.
+                     */
+                    dstname = NULL;
+                    slashtonull (hdr->name, hdr->nameln - 1);
+                    cmp = memcmp (hdr->name, srcprefixnul, srcprefixlen);
+                    nulltoslash (hdr->name, hdr->nameln - 1);
+                    if (cmp >  0) break;
+                    if (cmp == 0) {
+                        dstname = dstnamebuf;
+                        memcpy (dstnamebuf, dstprefix, dstprefixlen);
+                        memcpy (dstnamebuf + dstprefixlen, hdr->name + srcprefixlen, srcnamelen - srcprefixlen);
+                    }
 
-                /*
-                 * If we won't be restoring anything more to a directory,
-                 * set its times.
-                 */
-                while ((dstname != NULL) && ((dirTime = dirTimes) != NULL) &&
-                        (memcmp (dstname, dirTime->name, dirTime->nameln) > 0)) {
-                    dirTimes = dirTime->next;
-                    utimensat (AT_FDCWD, dirTime->name, dirTime->times, AT_SYMLINK_NOFOLLOW);
-                    free (dirTime);
-                }
+                    /*
+                     * If we won't be restoring anything more to a previous directory,
+                     * set its times.
+                     */
+                    while ((dstname != NULL) && ((dirTime = dirTimes) != NULL) &&
+                            (memcmp (dstname, dirTime->name, dirTime->nameln) > 0)) {
+                        dirTimes = dirTime->next;
+                        updatetimes (dirTime->name, dirTime->atimns, dirTime->mtimns);
+                        free (dirTime);
+                    }
 
-                /*
-                 * If file is selected, maybe output listing line.
-                 * Then if in listing mode, don't write output file (just skip over the data).
-                 */
-                if (dstname != NULL) {
-                    dstname = maybe_output_listing (dstname, hdr);
-                }
+                    /*
+                     * If file is selected, maybe output listing line.
+                     * Then if in listing mode, don't write output file (just skip over the data).
+                     */
+                    if (dstname != NULL) {
+                        dstname = maybe_output_listing (dstname, hdr);
+                    }
 
-                /*
-                 * Call the processing funtion, skipping the data if not enabled.
-                 */
-                setimes = false;
-                try {
+                    /*
+                     * Call the processing funtion, skipping the data if not enabled.
+                     */
+                    setimes = false;
                          if (S_ISREG (hdr->stmode)) thisok = read_regular   (hdr, dstname);
                     else if (S_ISDIR (hdr->stmode)) thisok = read_directory (hdr, dstname, &setimes);
                     else if (S_ISLNK (hdr->stmode)) thisok = read_symlink   (hdr, dstname);
                                                else thisok = read_special   (hdr, dstname);
-                } catch (LostSSBlock *lssb) {
-                    delete lssb;
-                    goto badmedia;
-                }
-                ok &= thisok;
-                lastfilenofinished = hdr->fileno;
+                    ok &= thisok;
+                    lastfilenofinished = hdr->fileno;
 
-                /*
-                 * If restored successfully, try to set ownership, protection and times.
-                 */
-                if (thisok && (dstname != NULL)) {
-                    lchown (dstname, hdr->ownuid, hdr->owngid);
-                    if (!S_ISLNK (hdr->stmode)) chmod (dstname, hdr->stmode);
-                    if (!S_ISDIR (hdr->stmode)) {
-                        memset (times, 0, sizeof times);
-                        times[0].tv_sec  = hdr->atimns / 1000000000;
-                        times[0].tv_nsec = hdr->atimns % 1000000000;
-                        times[1].tv_sec  = hdr->mtimns / 1000000000;
-                        times[1].tv_nsec = hdr->mtimns % 1000000000;
-                        utimensat (AT_FDCWD, dstname, times, AT_SYMLINK_NOFOLLOW);
-                    } else if (setimes) {
-                        cmp = strlen (dstname);
-                        dirTime = (DirTime *) malloc (cmp + sizeof *dirTime);
-                        if (dirTime == NULL) NOMEM ();
-                        memset (dirTime, 0, sizeof *dirTime);
-                        dirTime->next = dirTimes;
-                        dirTime->times[0].tv_sec  = hdr->atimns / 1000000000;
-                        dirTime->times[0].tv_nsec = hdr->atimns % 1000000000;
-                        dirTime->times[1].tv_sec  = hdr->mtimns / 1000000000;
-                        dirTime->times[1].tv_nsec = hdr->mtimns % 1000000000;
-                        dirTime->nameln = cmp;
-                        strcpy (dirTime->name, dstname);
-                        dirTimes = dirTime;
+                    /*
+                     * If restored successfully, try to set ownership, protection and times.
+                     */
+                    if (thisok && (dstname != NULL)) {
+                        lchown (dstname, hdr->ownuid, hdr->owngid);
+                        if (!S_ISLNK (hdr->stmode)) chmod (dstname, hdr->stmode);
+                        if (!S_ISDIR (hdr->stmode)) {
+                            updatetimes (dstname, hdr->atimns, hdr->mtimns);
+                        } else if (setimes) {
+                            cmp = strlen (dstname);
+                            dirTime = (DirTime *) malloc (cmp + sizeof *dirTime);
+                            if (dirTime == NULL) NOMEM ();
+                            dirTime->next   = dirTimes;
+                            dirTime->atimns = hdr->atimns;
+                            dirTime->mtimns = hdr->mtimns;
+                            dirTime->nameln = cmp;
+                            strcpy (dirTime->name, dstname);
+                            dirTimes = dirTime;
+                        }
                     }
                 }
+            } catch (LostSSBlock *lssb) {
+                delete lssb;
+
+                /*
+                 * Some unrecoverable media error, skip to next block with a valid file header.
+                 */
+                fprintf (stderr, "ftbackup: searching saveset for next file header\n");
+                while (true) {
+                    try {
+                        do {
+                            rblock = read_block (true);
+                            read_raw (&basehdr, (ulong_t)basehdr.name - (ulong_t)&basehdr, false);
+                        } while (memcmp (basehdr.magic, HEADER_MAGIC, 8) != 0);
+                        break;
+                    } catch (LostSSBlock *lssb) {
+                        delete lssb;
+                    }
+                }
+                fprintf (stderr, "ftbackup: found file header in block %u at offset %u\n", rblock->seqno, rblock->hdroffs);
+                skipped = basehdr.fileno - lastfilenofinished - 1;
+                fprintf (stderr, "ftbackup: lost %u file%s due to bad saveset media\n", skipped, ((skipped == 1) ? "" : "s"));
+                needhdr = false;
+                ok = false;
             }
         }
 
+        /*
+         * Reached normal end of saveset, flush all pending directory time updates.
+         */
         while ((dirTime = dirTimes) != NULL) {
             dirTimes = dirTime->next;
-            utimensat (AT_FDCWD, dirTime->name, dirTime->times, AT_SYMLINK_NOFOLLOW);
+            updatetimes (dirTime->name, dirTime->atimns, dirTime->mtimns);
             free (dirTime);
         }
 
         /*
-         * Reached end of saveset, all done.
+         * All done.
          */
         close (ssfd);
         ssfd = -1;
@@ -911,8 +907,8 @@ void FTBReader::read_first_block ()
 }
 
 /**
- * @brief Scan forward trying to recover block lastseqno.
- * @returns pointer to block
+ * @brief Scan forward trying to read or recover block lastseqno.
+ * @returns pointer to malloc()d block
  *          also, readoffset incremented past what was last read
  *                xorblocks, gotxors updated
  *                possibly intermediate blocks stacked on linkedBlocks
@@ -1174,6 +1170,7 @@ noxoread:
         linkedBlocks      = linkedBlock;
         linkedBlock       = NULL;
     }
+    fprintf (stderr, "ftbackup: reached end of xor span\n");
 
 unrecoverable:
     fprintf (stderr, "ftbackup: block %u unrecoverable\n", lastseqno);
@@ -1255,15 +1252,37 @@ long FTBReader::wrapped_pread (int fd, void *buf, long len, uint64_t pos)
     return ofs;
 }
 
+/**
+ * @brief Replace all the slashes in a string with nulls.
+ */
 static void slashtonull (char *buf, int len)
 {
     int i;
     for (i = 0; i < len; i ++) if (buf[i] == '/') buf[i] = 0;
 }
+
+/**
+ * @brief Replace all the nulls in a string with slashes.
+ */
 static void nulltoslash (char *buf, int len)
 {
     int i;
     for (i = 0; i < len; i ++) if (buf[i] == 0) buf[i] = '/';
+}
+
+/**
+ * @brief Try to set a file's last access and last modification times.
+ */
+static void updatetimes (char const *name, uint64_t atimns, uint64_t mtimns)
+{
+    struct timespec times[2];
+
+    memset (times, 0, sizeof times);
+    times[0].tv_sec  = atimns / 1000000000;
+    times[0].tv_nsec = atimns % 1000000000;
+    times[1].tv_sec  = mtimns / 1000000000;
+    times[1].tv_nsec = mtimns % 1000000000;
+    utimensat (AT_FDCWD, name, times, AT_SYMLINK_NOFOLLOW);
 }
 
 /**
