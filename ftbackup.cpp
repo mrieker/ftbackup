@@ -840,31 +840,53 @@ bool FTBackup::blockbaseisvalid (Block *block)
  * @brief XOR the source data into the destination.
  * @param dst = output pointer
  * @param src = input pointer
- * @param nby = number of bytes, assumed to be multiple of 8
+ * @param nby = number of bytes, assumed to be multiple of 8 ge 16
  */
 void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
 {
-    nby /= 8;
-    do {
-        *(uint64_t *)dst ^= *(uint64_t *)src;
-        dst = (void *) ((ulong_t) dst + 8);
-        src = (void *) ((ulong_t) src + 8);
-    } while (-- nby > 0);
+    uint64_t tmp;
+
+    asm volatile (
+        "   shrl    $3,%3       \n"
+        "   movq    (%1),%0     \n"
+        "   decl    %3          \n"
+        "   .p2align 3          \n"
+        "1:                     \n"
+        "   addq    $8,%1       \n"
+        "   xorq    %0,(%2)     \n"
+        "   addq    $8,%2       \n"
+        "   decl    %3          \n"
+        "   movq    (%1),%0     \n"
+        "   jne     1b          \n"
+        "   xorq    %0,(%2)     \n"
+            : "=r" (tmp), "+r" (src), "+r" (dst), "+r" (nby)
+            : : "cc", "memory");
 }
 
 /**
  * @brief Compute 32-bit sum of data.
  * @param src = array of 32-bit values
- * @param nby = number of bytes, assumed to be multiple of 4
+ * @param nby = number of bytes, assumed to be multiple of 4 ge 8
  * @returns sum of the values
  */
 uint32_t FTBackup::checksumdata (void const *src, uint32_t nby)
 {
-    uint32_t sum = 0;
-    nby /= 4;
-    do {
-        sum += *(uint32_t *)src;
-        src  = (void const *) ((ulong_t) src + 4);
-    } while (-- nby > 0);
+    uint32_t sum, tmp;
+
+    asm (
+        "   xorl    %2,%2       \n"
+        "   shrl    $2,%3       \n"
+        "   movl    (%1),%0     \n"
+        "   decl    %3          \n"
+        "   .p2align 3          \n"
+        "1:                     \n"
+        "   addq    $4,%1       \n"
+        "   addl    %0,%2       \n"
+        "   decl    %3          \n"
+        "   movl    (%1),%0     \n"
+        "   jne     1b          \n"
+        "   addl    %0,%2       \n"
+            : "=r" (tmp), "+r" (src), "=r" (sum), "+r" (nby)
+            : : "cc", "memory");
     return sum;
 }
