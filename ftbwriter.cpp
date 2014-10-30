@@ -871,6 +871,7 @@ void *FTBWriter::write_thread ()
                 oldxorbc = xorblock->xorbc;
                 xorblockdata (xorblock, block, bs);
                 xorblock->xorbc = ++ oldxorbc;
+                free_block (block);
             }
             if (seqno % (xorgc * xorsc) == 0) {
                 flush_xor_blocks ();
