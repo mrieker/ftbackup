@@ -24,6 +24,7 @@ struct FTBWriter : FTBackup {
     int write_saveset (char const *ssname, char const *rootpath);
 
 private:
+    Block *volatile freeblocks;
     Block **xorblocks;
     bool zisopen;
     char **inodesname;
@@ -65,7 +66,7 @@ private:
     static void *write_thread_wrapper (void *ftbw);
     void *write_thread ();
     void flush_xor_blocks ();
-    void verify_last_xor_span ();
+    void free_block (Block *block);
 };
 
 #endif
