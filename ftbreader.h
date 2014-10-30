@@ -24,6 +24,8 @@ private:
     bool wprwrite;
     bool zisopen;
     char **inodesname;
+    char const *ssbasename;
+    char *sssegname;
     FILE *wprfile;
     int ssfd;
     LinkedBlock *linkedBlocks;
@@ -34,6 +36,7 @@ private:
     uint32_t lastfileno;
     uint32_t lastseqno;
     uint32_t lastxorno;
+    uint32_t thissegno;
     uint64_t pipepos;
     uint64_t readoffset;
     uint8_t *gotxors;
@@ -47,7 +50,7 @@ private:
     Block *read_block (bool skipfh);
     void read_first_block ();
     LinkedBlock *read_or_recover_block ();
-    long wrapped_pread (int fd, void *buf, long len, uint64_t pos);
+    long wrapped_pread (void *buf, long len, uint64_t pos);
 };
 
 #endif

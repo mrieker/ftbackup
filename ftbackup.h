@@ -22,6 +22,7 @@
 #define MINBLOCKSIZE PAGESIZE
 #define DEFBLOCKSIZE (32768U)
 #define MAXBLOCKSIZE (1024*1024*1024U)
+#define SEGNODECDIGS 6
 
 #define DEFXORSC 31 // write one XOR block per 31 data blocks
 #define DEFXORGC 2  // write XOR blocks in groups of 2, ie, after 62 data blocks
@@ -48,7 +49,8 @@ typedef unsigned long long uint64_t;
 typedef unsigned long ulong_t;
 
 struct Block {
-    char        magic[8];   // magic number
+    char        magic[8];   // magic number BLOCK_MAGIC
+    uint64_t    nonce;      // encryption nonce (zero if not encrypted)
     uint32_t    chksum;     // block checksum
     uint32_t    seqno;      // block sequence number
     uint32_t    xorno;      // xor sequence number (0 for data blocks)
@@ -61,7 +63,7 @@ struct Block {
 };
 
 struct Header {
-    char        magic[8];   // magic number
+    char        magic[8];   // magic number HEADER_MAGIC
     uint64_t    mtimns;     // data mod time
     uint64_t    ctimns;     // attr mod time
     uint64_t    atimns;     // access time

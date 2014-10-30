@@ -18,6 +18,7 @@ struct LostSSBlock {
     LostSSBlock (uint32_t sn) { seqno = sn; }
 };
 
+static uint32_t findnextsegno (char const *basename, uint32_t lastsegno);
 static void slashtonull (char *buf, int len);
 static void nulltoslash (char *buf, int len);
 static void updatetimes (char const *name, uint64_t atimns, uint64_t mtimns);
@@ -33,6 +34,8 @@ FTBReader::FTBReader ()
     wprwrite      = 0;
     zisopen       = 0;
     inodesname    = NULL;
+    ssbasename    = NULL;
+    sssegname     = NULL;
     wprfile       = NULL;
     ssfd          = -1;
     linkedBlocks  = NULL;
@@ -43,6 +46,7 @@ FTBReader::FTBReader ()
     lastfileno    = 0;
     lastseqno     = 0;
     lastxorno     = 0;
+    thissegno     = 0;
     pipepos       = 0;
     readoffset    = 0;
     gotxors       = NULL;
@@ -100,11 +104,12 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
 {
     Block *rblock;
     bool needhdr, ok, setimes, thisok;
+    char *p;
     char *srcprefixnul;
     DirTime *dirTime, *dirTimes;
     Header basehdr;
-    int cmp, lastfilenofinished;
-    uint32_t dstprefixlen, skipped, srcprefixlen;
+    int cmp, lastfilenofinished, ssnamelen;
+    uint32_t dstprefixlen, hassegno, skipped, srcprefixlen;
 
     dstprefixlen = strlen (dstprefix);
     srcprefixlen = strlen (srcprefix);
@@ -116,12 +121,70 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
     if (strcmp (ssname, "-") == 0) {
         ssfd = STDIN_FILENO;
     } else {
-        ssfd = open (ssname, O_RDONLY);
-        if (ssfd < 0) {
-            fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, strerror (errno));
-            return EX_SSIO;
+
+        // if name ends in .<exactly-SEGNODECDIGS-digits> the digits are the starting segment number
+        // and everything before that is the base name
+        hassegno  = 0xFFFFFFFFU;
+        ssnamelen = strlen (ssname);
+        if ((ssnamelen > SEGNODECDIGS) && (ssname[ssnamelen-SEGNODECDIGS-1] == '.')) {
+            hassegno = strtoul (ssname + ssnamelen - SEGNODECDIGS, &p, 10);
+            if (*p != 0) hassegno = 0xFFFFFFFFU;
+        }
+
+        // if it has .<digits>, the user is giving us an explicit segment to start at
+        // so we must be able to open that exact file
+        if (hassegno != 0xFFFFFFFFU) {
+
+            // the segment number is the <digits>
+            thissegno = hassegno;
+
+            // this segment name is whatever the whole string is that we were given
+            sssegname = (char *) alloca (ssnamelen + 16);
+            strcpy (sssegname, ssname);
+
+            // the base name is everything before the .<digits>
+            p = (char *) alloca (ssnamelen - SEGNODECDIGS);
+            memcpy (p, ssname, ssnamelen - SEGNODECDIGS - 1);
+            p[ssnamelen-SEGNODECDIGS-1] = 0;
+            ssbasename = p;
+
+            // we must be able to open that specific file as given by the user
+            ssfd = open (ssname, O_RDONLY);
+            if (ssfd < 0) {
+                fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, strerror (errno));
+                return EX_SSIO;
+            }
+        } else {
+
+            // if no .<digits>, the user could be saying to open that exact file
+            // or for us to find the first segment file starting with that name
+            ssfd = open (ssname, O_RDONLY);
+            if (ssfd < 0) {
+
+                // if something like permissions error, print error and die
+                if (errno != ENOENT) {
+                    fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, strerror (errno));
+                    return EX_SSIO;
+                }
+
+                // the given name is not found, try opening <givenname>.<lowest-segno>
+                thissegno  = findnextsegno (ssname, 0);
+                if (thissegno == 0) {
+                    fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, strerror (ENOENT));
+                    return EX_SSIO;
+                }
+                ssbasename = ssname;
+                sssegname  = (char *) alloca (ssnamelen + 16);
+                sprintf (sssegname, "%s.%.*u", ssname, SEGNODECDIGS, thissegno);
+                ssfd = open (sssegname, O_RDONLY);
+                if (ssfd < 0) {
+                    fprintf (stderr, "ftbackup: open(%s) error: %s\n", sssegname, strerror (errno));
+                    return EX_SSIO;
+                }
+            }
         }
     }
+
     if (fstat (ssfd, &ssstat) < 0) abort ();
 
     try {
@@ -832,7 +895,7 @@ void FTBReader::read_first_block ()
          */
         while (true) {
             miniOffset = readoffset;
-            rc = wrapped_pread (ssfd, miniBlock, MINBLOCKSIZE, readoffset);
+            rc = wrapped_pread (miniBlock, MINBLOCKSIZE, readoffset);
             readoffset += MINBLOCKSIZE;
             if (rc == MINBLOCKSIZE) break;
             fprintf (stderr, "ftbackup: pread(%llu) saveset error: %s\n", miniOffset,
@@ -950,7 +1013,7 @@ LinkedBlock *FTBReader::read_or_recover_block ()
         if (linkedBlock == NULL) NOMEM ();
 noxoread:
         lastreadoffs = readoffset;
-        rc = wrapped_pread (ssfd, &linkedBlock->block, bs, readoffset);
+        rc = wrapped_pread (&linkedBlock->block, bs, readoffset);
         readoffset += bs;
 
         // if read error, output message and read again.
@@ -1010,7 +1073,7 @@ noxoread:
         if (linkedBlock == NULL) linkedBlock = (LinkedBlock *) malloc (bs + sizeof *linkedBlock);
         if (linkedBlock == NULL) NOMEM ();
         lastreadoffs = readoffset;
-        rc = wrapped_pread (ssfd, &linkedBlock->block, bs, lastreadoffs);
+        rc = wrapped_pread (&linkedBlock->block, bs, lastreadoffs);
 
         /*
          * The next read will be at beginning of next block no matter if this one was an error or not.
@@ -1178,9 +1241,10 @@ unrecoverable:
 }
 
 /**
- * @brief Just like pread(), but fakes errors at random.
+ * @brief Just like pread(), but also handles spilling over segment files.
+ *        We also can fake errors at random.
  */
-long FTBReader::wrapped_pread (int fd, void *buf, long len, uint64_t pos)
+long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
 {
     long ofs, rc;
     struct timeval nowtv;
@@ -1226,8 +1290,44 @@ long FTBReader::wrapped_pread (int fd, void *buf, long len, uint64_t pos)
     /*
      * Block devices use the real pread() directly.
      */
-    if (S_ISREG (ssstat.st_mode) || S_ISBLK (ssstat.st_mode)) {
-        return pread (fd, buf, len, pos);
+    while (S_ISREG (ssstat.st_mode) || S_ISBLK (ssstat.st_mode)) {
+
+        /*
+         * See if position is within this segment file.
+         * If so, we should be able to read directly from file.
+         * If not doing segments, do the read anyway and let it error out.
+         */
+        if ((pos - pipepos < (uint64_t) ssstat.st_size) || (thissegno == 0)) {
+            return pread (ssfd, buf, len, pos - pipepos);
+        }
+
+        /*
+         * At the end of that segment file, see if there is another segment file.
+         * If not, return end-of-file status just like the pread() above would have.
+         */
+        thissegno = findnextsegno (ssbasename, thissegno);
+        if (thissegno == 0) return 0;
+
+        /*
+         * There is a next segment file, so close the last one and try to open next one.
+         */
+        close (ssfd);
+        sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, thissegno);
+        ssfd = open (sssegname, O_RDONLY);
+        if (ssfd < 0) {
+            fprintf (stderr, "ftbackup: open(%s) error: %s\n", sssegname, strerror (errno));
+            exit (EX_SSIO);
+        }
+
+        /*
+         * We should always be able to get its size and what type of file it is.
+         */
+        if (!fstat (ssfd, &ssstat) < 0) abort ();
+
+        /*
+         * Save what position within all segments this segment starts at.
+         */
+        pipepos = pos;
     }
 
     /*
@@ -1236,7 +1336,7 @@ long FTBReader::wrapped_pread (int fd, void *buf, long len, uint64_t pos)
     while (pipepos < pos) {
         ofs = pos - pipepos;
         if (ofs > len) ofs = len;
-        rc = read (fd, buf, ofs);
+        rc = read (ssfd, buf, ofs);
         if (rc <= 0) return rc;
         pipepos += rc;
     }
@@ -1245,13 +1345,89 @@ long FTBReader::wrapped_pread (int fd, void *buf, long len, uint64_t pos)
      * Try to read all requested bytes.
      */
     for (ofs = 0; ofs < len; ofs += rc) {
-        rc = read (fd, (char *) buf + ofs, len - ofs);
+        rc = read (ssfd, (char *) buf + ofs, len - ofs);
         if (rc < 0) return rc;
         if (rc == 0) break;
     }
     return ofs;
 }
 
+/**
+ * @brief Find next segment file for the given base name in the form <basename>.<segno>
+ *        where <segno> is exactly SEGNODECDIGS decimal digits gt 0
+ * @param basename = string coming before the .<segno> string on the end
+ * @param lastsegno = previous segment number processed
+ * @returns 0: no next file found
+ *       else: next greater segment number
+ */
+static uint32_t findnextsegno (char const *basename, uint32_t lastsegno)
+{
+    char *dirname, *name, *p;
+    int i, nents, plen;
+    struct dirent *de, **names;
+    uint32_t nextsegno, segno;
+
+    /*
+     * Get basename's directory name in 'dirname'
+     * then point basename to remainder of basename
+     */
+    dirname = (char *) alloca (strlen (basename) + 2);
+    strcpy (dirname, basename);
+    p = strrchr (dirname, '/');
+    if (p != NULL) {
+        *p = 0;
+        basename += ++ p - dirname;
+    } else {
+        strcpy (dirname, ".");
+    }
+    plen = strlen (basename);
+
+    /*
+     * Scan whatever directory the base name file is in.
+     */
+    nents = scandir (dirname, &names, NULL, alphasort);
+    if (nents < 0) {
+        fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dirname, strerror (errno));
+        exit (EX_SSIO);
+    }
+
+    /*
+     * Hopefully we can find a higher numbered file in there somewhere.
+     */
+    nextsegno = 0;
+    for (i = 0; i < nents; i ++) {
+        de = names[i];
+        name = de->d_name;
+
+        /*
+         * The name must be exactly <base name> <dot> <exactly SEGNODECDIGS decimal digits>.
+         */
+        if (((int) strlen (name) == plen + SEGNODECDIGS + 1) && (memcmp (name, basename, plen) == 0) && (name[plen] == '.')) {
+            segno = strtoul (name + plen + 1, &p, 10);
+            if ((*p == 0) && (segno > lastsegno)) {
+                nextsegno = segno;
+                break;
+            }
+        }
+
+        /*
+         * No luck, free it off and try next.
+         */
+        free (de);
+    }
+
+    /*
+     * Free of remainder of names.
+     */
+    while (i < nents) free (names[i++]);
+    free (names);
+
+    /*
+     * Return segment number from the <SEGNODECDIGS decimal digits> or 0 if not found.
+     */
+    return nextsegno;
+}
+
 /**
  * @brief Replace all the slashes in a string with nulls.
  */

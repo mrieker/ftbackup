@@ -17,6 +17,7 @@ struct FTBWriter : FTBackup {
     int ioptions;
     int ooptions;
     int opt_verbsec;
+    uint64_t opt_segsize;
     uint64_t opt_since;
 
     FTBWriter ();
@@ -27,6 +28,8 @@ private:
     Block *volatile freeblocks;
     Block **xorblocks;
     bool zisopen;
+    char const *ssbasename;
+    char *sssegname;
     char **inodesname;
     dev_t inodesdevno;
     ino_t *inodeslist;
@@ -37,6 +40,8 @@ private:
     uint32_t lastfileno;
     uint32_t lastseqno;
     uint32_t lastxorno;
+    uint32_t thissegno;
+    uint64_t byteswrittentoseg;
     z_stream zstrm;
 
     Block          *compr2write_slots[COMPR2WRITE_NSLOTS];
@@ -66,6 +71,7 @@ private:
     static void *write_thread_wrapper (void *ftbw);
     void *write_thread ();
     void flush_xor_blocks ();
+    void write_ssblock (Block *block);
     void free_block (Block *block);
 };
 

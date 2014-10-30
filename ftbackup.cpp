@@ -54,12 +54,15 @@ static int cmd_backup (int argc, char **argv)
     FTBWriter ftbwriter = FTBWriter ();
     int i, j, k;
     uint32_t blocksize;
+    uint64_t spansize;
 
     ftbwriter.l2bs  = __builtin_ctz (DEFBLOCKSIZE);
     ftbwriter.xorgc = DEFXORGC;
     ftbwriter.xorsc = DEFXORSC;
-    rootpath = NULL;
-    ssname   = NULL;
+    blocksize = DEFBLOCKSIZE;
+    rootpath  = NULL;
+    ssname    = NULL;
+
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
             if (strcasecmp (argv[i], "-blocksize") == 0) {
@@ -92,6 +95,15 @@ static int cmd_backup (int argc, char **argv)
             if (strcasecmp (argv[i], "-record") == 0) {
                 if (++ i >= argc) goto usage;
                 if (!write_nanos_to_file (0, argv[i])) return EX_CMD;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-segsize") == 0) {
+                if (++ i >= argc) goto usage;
+                ftbwriter.opt_segsize = strtoull (argv[i], &p, 0);
+                if (*p != 0) {
+                    fprintf (stderr, "ftbackup: invalid blocksize %s\n", argv[i]);
+                    goto usage;
+                }
                 continue;
             }
             if (strcasecmp (argv[i], "-since") == 0) {
@@ -149,6 +161,21 @@ static int cmd_backup (int argc, char **argv)
         fprintf (stderr, "ftbackup: missing <rootpath>\n");
         goto usage;
     }
+
+    // how many bytes needed for one span of data blocks plus their corresponding XOR blocks
+    spansize = blocksize;
+    if (ftbwriter.xorgc != 0) spansize *= ftbwriter.xorgc * (ftbwriter.xorsc + 1);
+
+    // enforce this constraint so that each segment file starts an XOR span anew thus
+    // allowing the reader to assume the XOR values are all zeroes at beginning of each
+    // segment file
+    if (ftbwriter.opt_segsize % spansize != 0) {
+        fprintf (stderr, "ftbackup: segsize %llu=0x%llX not multiple of span+xor size %llu=0x%llX\n",
+                ftbwriter.opt_segsize, ftbwriter.opt_segsize, spansize, spansize);
+        goto usage;
+    }
+
+    // write saveset...
     return ftbwriter.write_saveset (ssname, rootpath);
 
 usage:
@@ -162,6 +189,10 @@ usage:
     fprintf (stderr, "    -odirect              use O_DIRECT when writing saveset\n");
     fprintf (stderr, "    -osync                use O_SYNC when writing saveset\n");
     fprintf (stderr, "    -record <file>        record backup date/time to given file\n");
+    fprintf (stderr, "    -segsize <segsz>      write saveset to multiple files, each of maximum size <segsz>\n");
+    fprintf (stderr, "                            default is to write saveset to one file no matter how big\n");
+    fprintf (stderr, "                            <segsz> %% (<bs> * <xorgc> * (<xorsc> + 1)) == 0\n");
+    fprintf (stderr, "                            ...so each segment file starts a new xor span\n");
     fprintf (stderr, "    -since <file>         skip files with ctime earlier than in file\n");
     fprintf (stderr, "                            default is to process all files\n");
     fprintf (stderr, "    -verbose              print name of each file processed\n");
@@ -311,12 +342,14 @@ static bool diff_regular (char const *path1, char const *path2)
     uint8_t buf1[32768], buf2[32768];
 
     fd1 = open (path1, O_RDONLY | O_NOATIME);
+    if (fd1 < 0) fd1 = open (path1, O_RDONLY);
     if (fd1 < 0) {
         printf ("diff regular open %s error %d\n", path1, errno);
         return true;
     }
 
     fd2 = open (path2, O_RDONLY | O_NOATIME);
+    if (fd2 < 0) fd2 = open (path2, O_RDONLY);
     if (fd2 < 0) {
         printf ("diff regular open %s error %d\n", path2, errno);
         close (fd1);

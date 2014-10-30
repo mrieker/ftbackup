@@ -8,11 +8,14 @@ FTBWriter::FTBWriter ()
     ioptions    = 0;
     ooptions    = 0;
     opt_verbsec = 0;
+    opt_segsize = 0;
     opt_since   = 0;
 
     freeblocks  = NULL;
     xorblocks   = NULL;
     zisopen     = 0;
+    ssbasename  = NULL;
+    sssegname   = NULL;
     inodesname  = NULL;
     inodesdevno = 0;
     inodeslist  = NULL;
@@ -23,6 +26,8 @@ FTBWriter::FTBWriter ()
     lastfileno  = 0;
     lastseqno   = 0;
     lastxorno   = 0;
+    thissegno   = 0;
+    byteswrittentoseg = 0;
     memset (&zstrm, 0, sizeof zstrm);
 
     memset (compr2write_slots, 0, sizeof compr2write_slots);
@@ -119,9 +124,15 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
         }
         fflush (stdout);
     } else {
+        if (opt_segsize > 0) {
+            ssbasename = ssname;
+            sssegname  = (char *) alloca (strlen (ssbasename) + 10);
+            ssname     = sssegname;
+            sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
+        }
         ssfd = open (ssname, O_WRONLY | O_CREAT | O_TRUNC | ooptions, 0666);
         if (ssfd < 0) {
-            fprintf (stderr, "ftbackup: open(%s) saveset error: %s\n", ssname, strerror (errno));
+            fprintf (stderr, "ftbackup: creat(%s) saveset error: %s\n", ssname, strerror (errno));
             return EX_SSIO;
         }
         if (isatty (ssfd)) {
@@ -807,8 +818,7 @@ void *FTBWriter::write_thread_wrapper (void *ftbw)
 void *FTBWriter::write_thread ()
 {
     Block *block, *xorblock;
-    int rc;
-    uint32_t bs, i, ofs, seqno;
+    uint32_t bs, i, seqno;
     uint8_t oldxorbc;
 
     bs = 1 << l2bs;
@@ -849,13 +859,7 @@ void *FTBWriter::write_thread ()
         /*
          * Write block to saveset file.
          */
-        for (ofs = 0; ofs < bs; ofs += rc) {
-            rc = write (ssfd, ((uint8_t *)block) + ofs, bs - ofs);
-            if (rc <= 0) {
-                fprintf (stderr, "ftbackup: write() saveset error: %s\n", (rc == 0) ? "end of file" : strerror (errno));
-                exit (EX_SSIO);
-            }
-        }
+        write_ssblock (block);
 
         /*
          * If we are generating XOR blocks, XOR the data block into the XOR block.
@@ -894,8 +898,7 @@ void *FTBWriter::write_thread ()
 void FTBWriter::flush_xor_blocks ()
 {
     Block *block;
-    int rc;
-    uint32_t bs, i, ofs;
+    uint32_t bs, i;
 
     bs = 1 << l2bs;
     for (i = 0; i < xorgc; i ++) {
@@ -909,18 +912,45 @@ void FTBWriter::flush_xor_blocks ()
                 fprintf (stderr, "ftbackup: xor block %u not valid\n", block->xorno);
                 abort ();
             }
-            for (ofs = 0; ofs < bs; ofs += rc) {
-                rc = write (ssfd, ((uint8_t *)block) + ofs, bs - ofs);
-                if (rc <= 0) {
-                    fprintf (stderr, "ftbackup: write() saveset error: %s\n", (rc == 0) ? "end of file" : strerror (errno));
-                    exit (EX_SSIO);
-                }
-            }
+            write_ssblock (block);
             free_block (block);
             xorblocks[i] = NULL;
         }
     }
     lastxorno += xorgc;
+}
+
+/**
+ * @brief Write block to saveset file.
+ */
+void FTBWriter::write_ssblock (Block *block)
+{
+    int rc;
+    uint32_t bs, ofs;
+
+    if ((opt_segsize > 0) && (byteswrittentoseg >= opt_segsize)) {
+        if (close (ssfd) < 0) {
+            fprintf (stderr, "ftbackup: close(%s) saveset error: %s\n", sssegname, strerror (errno));
+            exit (EX_SSIO);
+        }
+        sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
+        ssfd = open (sssegname, O_WRONLY | O_CREAT | O_TRUNC | ooptions, 0666);
+        if (ssfd < 0) {
+            fprintf (stderr, "ftbackup: creat(%s) saveset error: %s\n", sssegname, strerror (errno));
+            exit (EX_SSIO);
+        }
+        byteswrittentoseg = 0;
+    }
+
+    bs = 1 << l2bs;
+    for (ofs = 0; ofs < bs; ofs += rc) {
+        rc = write (ssfd, ((uint8_t *)block) + ofs, bs - ofs);
+        if (rc <= 0) {
+            fprintf (stderr, "ftbackup: write() saveset error: %s\n", (rc == 0) ? "end of file" : strerror (errno));
+            exit (EX_SSIO);
+        }
+    }
+    byteswrittentoseg += bs;
 }
 
 /**
