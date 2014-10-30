@@ -265,6 +265,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
      * Make sure we can open the file before writing header.
      */
     fd = open (hdr->name, O_RDONLY | O_NOATIME | ioptions);
+    if (fd < 0) fd = open (hdr->name, O_RDONLY | ioptions);
     if (fd < 0) {
         fprintf (stderr, "ftbackup: open(%s) error: %s\n", hdr->name, strerror (errno));
         return true;
