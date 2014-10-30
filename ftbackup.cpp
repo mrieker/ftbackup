@@ -637,6 +637,7 @@ static int cmd_xorvfy (int argc, char **argv)
 {
     char const *name;
     Block baseblock, *block, *xorblk, **xorblocks;
+    bool ok;
     int fd, rc;
     uint32_t bs, lastseqno, lastxorno, xorgn;
     uint64_t rdpos;
@@ -658,9 +659,10 @@ static int cmd_xorvfy (int argc, char **argv)
     if (rc != sizeof baseblock) {
         if (rc < 0) {
             fprintf (stderr, "read(%s) error: %s\n", name, strerror (errno));
-            return EX_SSIO;
+        } else {
+            fprintf (stderr, "read(%s) file too short\n", name);
         }
-        fprintf (stderr, "read(%s) too short\n", name);
+        close (fd);
         return EX_SSIO;
     }
 
@@ -673,23 +675,24 @@ static int cmd_xorvfy (int argc, char **argv)
 
     lastseqno = 0;
     lastxorno = 0;
+    ok = false;
     rdpos = 0;
 
     while (((rc = pread (fd, block, bs, rdpos)) >= 0) && ((uint32_t) rc == bs)) {
         if (memcmp (block->magic, BLOCK_MAGIC, 8) != 0) {
             fprintf (stderr, "%llu: bad block magic\n", rdpos);
-            return EX_SSIO;
+            goto done;
         }
         if (block->xorno == 0) {
             if ((block->l2bs != baseblock.l2bs) || (block->xorgc != baseblock.xorgc) || (block->xorsc != baseblock.xorsc)) {
                 fprintf (stderr, "%llu: bad numbers %u,%u,%u, expect %u,%u,%u in seqno %u\n",
                         rdpos, block->l2bs, block->xorgc, block->xorsc,
                         baseblock.l2bs, baseblock.xorgc, baseblock.xorsc, block->seqno);
-                return EX_SSIO;
+                goto done;
             }
             if (++ lastseqno != block->seqno) {
                 fprintf (stderr, "%llu: bad seqno %u\n", rdpos, block->seqno);
-                return EX_SSIO;
+                goto done;
             }
             xorgn  = (block->seqno - 1) % baseblock.xorgc;
             xorblk = xorblocks[xorgn];
@@ -700,13 +703,13 @@ static int cmd_xorvfy (int argc, char **argv)
         } else {
             if (++ lastxorno != block->xorno) {
                 fprintf (stderr, "%llu: bad xorno %u\n", rdpos, block->xorno);
-                return EX_SSIO;
+                goto done;
             }
             xorgn  = (block->xorno - 1) % baseblock.xorgc;
             xorblk = xorblocks[xorgn];
             if (xorcounts[xorgn] != block->xorbc) {
                 fprintf (stderr, "%llu: bad xorbc %u\n", rdpos, block->xorbc);
-                return EX_SSIO;
+                goto done;
             }
             //if (xorgn == 0) fprintf (stderr, "xorvfy*: xorno %6u data %02X xor before %02X\n", block->xorno, block->data[0], xorblk->data[0]);
             FTBackup::xorblockdata (xorblk, block, bs);
@@ -714,7 +717,7 @@ static int cmd_xorvfy (int argc, char **argv)
             for (rc = 0; rc < (uint8_t *)block + bs - block->data; rc ++) {
                 if (xorblk->data[rc] != 0) {
                     fprintf (stderr, "%llu: bad xor data at xorno %u[%d]\n", rdpos, block->xorno, rc);
-                    return EX_SSIO;
+                    goto done;
                 }
             }
 
@@ -727,22 +730,31 @@ static int cmd_xorvfy (int argc, char **argv)
 
     if (rc < 0) {
         fprintf (stderr, "%llu: pread() error: %s\n", rdpos, strerror (errno));
-        return EX_SSIO;
+        goto done;
     }
     if (rc != 0) {
         fprintf (stderr, "%llu: pread() only %d bytes of %u\n", rdpos, rc, bs);
-        return EX_SSIO;
+        goto done;
     }
 
     for (xorgn = 0; xorgn < baseblock.xorgc; xorgn ++) {
         if (xorcounts[xorgn] != 0) {
             fprintf (stderr, "%llu: missing end xor block group %u\n", rdpos, xorgn);
-            return EX_SSIO;
+            goto done;
         }
     }
 
     fprintf (stderr, "success!\n");
-    return EX_OK;
+    ok = true;
+
+done:
+    close (fd);
+    for (xorgn = 0; xorgn < baseblock.xorgc; xorgn ++) free (xorblocks[xorgn]);
+    free (block);
+    free (xorblocks);
+    free (xorcounts);
+
+    return ok ? EX_OK : EX_SSIO;
 }
 
 /**
