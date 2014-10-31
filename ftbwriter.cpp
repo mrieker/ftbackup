@@ -597,7 +597,7 @@ void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
     pthread_cond_signal (&main2compr_cond);
     pthread_mutex_unlock (&main2compr_mutex);
 }
-
+
 /**
  * @brief Take data from main2compr queue, optionally compress,
  *        and put in blocks for compr2write queue.
@@ -615,6 +615,11 @@ void *FTBWriter::compr_thread ()
 
     block = NULL;
     bs    = 1 << l2bs;
+
+    if (xorgc > 0) {
+        xorblocks = (Block **) calloc (xorgc, sizeof *xorblocks);
+        if (xorblocks == NULL) NOMEM ();
+    }
 
     while (true) {
 
@@ -654,11 +659,13 @@ void *FTBWriter::compr_thread ()
             while (zstrm.avail_in > 0) {
                 if (zstrm.avail_out == 0) {
                     block = malloc_block ();
+                    zstrm.next_out  = block->data;
+                    zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;
                 }
                 rc = deflate (&zstrm, Z_NO_FLUSH);
                 if (rc != Z_OK) INTERR (deflate, rc);
                 if (zstrm.avail_out == 0) {
-                    queue_block (block);
+                    queue_data_block (block);
                     block = NULL;
                 }
             }
@@ -672,10 +679,12 @@ void *FTBWriter::compr_thread ()
                 do {
                     if (zstrm.avail_out == 0) {
                         block = malloc_block ();
+                        zstrm.next_out  = block->data;
+                        zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;
                     }
                     rc = deflate (&zstrm, Z_FINISH);
                     if (zstrm.avail_out == 0) {
-                        queue_block (block);
+                        queue_data_block (block);
                         block = NULL;
                     }
                 } while (rc == Z_OK);
@@ -695,6 +704,8 @@ void *FTBWriter::compr_thread ()
                 // maybe we need a new output block
                 if (zstrm.avail_out == 0) {
                     block = malloc_block ();
+                    zstrm.next_out  = block->data;
+                    zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;
                 }
 
                 // if first header in the block, save its offset for recoveries
@@ -718,7 +729,7 @@ void *FTBWriter::compr_thread ()
 
                 // if output block full, queue it for writing
                 if (zstrm.avail_out == 0) {
-                    queue_block (block);
+                    queue_data_block (block);
                     block = NULL;
                 }
             } while (zstrm.avail_in > 0);
@@ -735,16 +746,145 @@ void *FTBWriter::compr_thread ()
      */
     if (zstrm.avail_out != 0) {
         memset (zstrm.next_out, 0xFF, zstrm.avail_out);
-        queue_block (block);
+        queue_data_block (block);
     }
-    queue_block (NULL);
+
+    /*
+     * Flush final XOR blocks and tell writer thread to terminate.
+     */
+    queue_data_block (NULL);
+
+    if (xorblocks != NULL) {
+        free (xorblocks);
+        xorblocks = NULL;
+    }
 
     return NULL;
 }
 
 /**
- * @brief Malloc a block and set up data area descriptor.
- *        They are page aligned so O_DIRECT will work.
+ * @brief Fill in data block header and queue block to write_thread().
+ * @param block = data block to queue
+ */
+void FTBWriter::queue_data_block (Block *block)
+{
+    Block *xorblock;
+    uint32_t bs, i, oldxorbc;
+
+    if (block != NULL) {
+        bs = 1 << l2bs;
+
+        /*
+         * Fill in data block header.
+         */
+        memcpy (block->magic, BLOCK_MAGIC, 8);
+        block->seqno  = ++ lastseqno;
+        block->l2bs   = l2bs;
+        block->xorgc  = xorgc;
+        block->xorsc  = xorsc;
+        block->chksum = 0;
+        block->chksum = - checksumdata (block, bs);
+
+        /*
+         * If we are generating XOR blocks, XOR the data block into the XOR block.
+         */
+        if ((xorgc > 0) && (xorsc > 0)) {
+
+            /*
+             * XOR the data block into the XOR block.
+             * Malloc one if there isn't one there already.
+             */
+            i = (lastseqno - 1) % xorgc;
+            xorblock = xorblocks[i];
+            if (xorblock == NULL) {
+                xorblock = malloc_block ();
+                memcpy (xorblock, block, bs);
+                xorblock->xorbc = 1;
+                xorblocks[i] = xorblock;
+            } else {
+                oldxorbc = xorblock->xorbc;
+                xorblockdata (xorblock, block, bs);
+                xorblock->xorbc = ++ oldxorbc;
+            }
+
+            /*
+             * Now that we have XOR'd the data, queue block for writing.
+             */
+            queue_block (block);
+
+            /*
+             * If that was the last data block of the XOR span, queue XOR blocks for writing.
+             */
+            if (lastseqno % (xorgc * xorsc) == 0) {
+                queue_xor_blocks ();
+            }
+        } else {
+
+            /*
+             * No XOR blocks, queue data block for writing.
+             */
+            queue_block (block);
+        }
+    } else {
+
+        /*
+         * End of data block stream,
+         * if doing XORs, flush final XOR blocks first,
+         * then post the EOF marker.
+         */
+        if ((xorgc > 0) && (xorsc > 0)) {
+            queue_xor_blocks ();
+        }
+
+        queue_block (NULL);
+    }
+}
+
+/**
+ * @brief Queue XOR blocks to be written to saveset file.
+ */
+void FTBWriter::queue_xor_blocks ()
+{
+    Block *block;
+    uint32_t bs, i;
+
+    bs = 1 << l2bs;
+    for (i = 0; i < xorgc; i ++) {
+        block = xorblocks[i];
+        if (block != NULL) {
+            memcpy (block->magic, BLOCK_MAGIC, 8);
+            block->xorno  = lastxorno + i + 1;
+            block->chksum = 0;
+            block->chksum = - checksumdata (block, bs);
+            queue_block (block);
+            xorblocks[i] = NULL;
+        }
+    }
+    lastxorno += xorgc;
+}
+
+/**
+ * @brief Queue block with header filled in to write_thread().
+ * @param block = block to queue or NULL for end-of-saveset marker
+ */
+void FTBWriter::queue_block (Block *block)
+{
+    uint32_t i;
+
+    pthread_mutex_lock (&compr2write_mutex);
+    while (compr2write_used == COMPR2WRITE_NSLOTS) {
+        pthread_cond_wait (&compr2write_cond, &compr2write_mutex);
+    }
+    i = (compr2write_next + compr2write_used) % COMPR2WRITE_NSLOTS;
+    compr2write_slots[i] = block;
+    if (++ compr2write_used == 1) {
+        pthread_cond_signal (&compr2write_cond);
+    }
+    pthread_mutex_unlock (&compr2write_mutex);
+}
+
+/**
+ * @brief Malloc a block.  They are page aligned so O_DIRECT will work.
  */
 Block *FTBWriter::malloc_block ()
 {
@@ -767,47 +907,15 @@ Block *FTBWriter::malloc_block ()
         : "=a" (block), "+m" (freeblocks), "=r" (tmp)
         : : "cc");
 
-    bs = 1 << l2bs;
     if (block == NULL) {
+        bs = 1 << l2bs;
         rc = posix_memalign ((void **)&block, PAGESIZE, bs);
         if (rc != 0) NOMEM ();
     }
     memset (block, 0, sizeof *block);
-    zstrm.next_out  = block->data;
-    zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;
     return block;
 }
-
-/**
- * @brief Queue block to write_thread().
- * @param block = block to queue or NULL for end-of-saveset marker
- */
-void FTBWriter::queue_block (Block *block)
-{
-    uint32_t i;
-
-    if (block != NULL) {
-        memcpy (block->magic, BLOCK_MAGIC, 8);
-        block->seqno  = ++ lastseqno;
-        block->l2bs   = l2bs;
-        block->xorgc  = xorgc;
-        block->xorsc  = xorsc;
-        block->chksum = 0;
-        block->chksum = - checksumdata (block, 1 << l2bs);
-    }
-
-    pthread_mutex_lock (&compr2write_mutex);
-    while (compr2write_used == COMPR2WRITE_NSLOTS) {
-        pthread_cond_wait (&compr2write_cond, &compr2write_mutex);
-    }
-    i = (compr2write_next + compr2write_used) % COMPR2WRITE_NSLOTS;
-    compr2write_slots[i] = block;
-    if (++ compr2write_used == 1) {
-        pthread_cond_signal (&compr2write_cond);
-    }
-    pthread_mutex_unlock (&compr2write_mutex);
-}
-
+
 /**
  * @brief Dequeue blocks from compr_thread() and write to saveset.
  */
@@ -817,14 +925,8 @@ void *FTBWriter::write_thread_wrapper (void *ftbw)
 }
 void *FTBWriter::write_thread ()
 {
-    Block *block, *xorblock;
-    uint32_t bs, i, seqno;
-    uint8_t oldxorbc;
-
-    bs = 1 << l2bs;
-
-    xorblocks = (Block **) calloc (xorgc, sizeof *xorblocks);
-    if (xorblocks == NULL) NOMEM ();
+    Block *block;
+    uint32_t i;
 
     while (true) {
 
@@ -849,75 +951,13 @@ void *FTBWriter::write_thread ()
         if (block == NULL) break;
 
         /*
-         * It should be valid.
-         */
-        if (!blockisvalid (block)) {
-            fprintf (stderr, "ftbackup: saveset block %u not valid\n", block->seqno);
-            abort ();
-        }
-
-        /*
-         * Write block to saveset file.
+         * Write block to saveset file then free it for re-use.
          */
         write_ssblock (block);
-
-        /*
-         * If we are generating XOR blocks, XOR the data block into the XOR block.
-         */
-        if ((xorgc > 0) && (xorsc > 0)) {
-            seqno = block->seqno;
-            i = (seqno - 1) % xorgc;
-            if (((seqno - 1) / xorgc) % xorsc == 0) {
-                xorblocks[i] = block;
-                block->xorbc = 1;
-            } else {
-                xorblock = xorblocks[i];
-                oldxorbc = xorblock->xorbc;
-                xorblockdata (xorblock, block, bs);
-                xorblock->xorbc = ++ oldxorbc;
-                free_block (block);
-            }
-            if (seqno % (xorgc * xorsc) == 0) {
-                flush_xor_blocks ();
-            }
-        } else {
-            free_block (block);
-        }
+        free_block (block);
     }
-
-    flush_xor_blocks ();
-    free (xorblocks);
-    xorblocks = NULL;
 
     return NULL;
-}
-
-/**
- * @brief Write XOR blocks to saveset file.
- */
-void FTBWriter::flush_xor_blocks ()
-{
-    Block *block;
-    uint32_t bs, i;
-
-    bs = 1 << l2bs;
-    for (i = 0; i < xorgc; i ++) {
-        block = xorblocks[i];
-        if (block != NULL) {
-            memcpy (block->magic, BLOCK_MAGIC, 8);
-            block->xorno  = lastxorno + i + 1;
-            block->chksum = 0;
-            block->chksum = - checksumdata (block, bs);
-            if (!blockbaseisvalid (block)) {
-                fprintf (stderr, "ftbackup: xor block %u not valid\n", block->xorno);
-                abort ();
-            }
-            write_ssblock (block);
-            free_block (block);
-            xorblocks[i] = NULL;
-        }
-    }
-    lastxorno += xorgc;
 }
 
 /**

@@ -66,11 +66,12 @@ private:
     void write_queue (void *buf, uint32_t len, int dty);
     static void *compr_thread_wrapper (void *ftbw);
     void *compr_thread ();
-    Block *malloc_block ();
+    void queue_data_block (Block *block);
+    void queue_xor_blocks ();
     void queue_block (Block *block);
+    Block *malloc_block ();
     static void *write_thread_wrapper (void *ftbw);
     void *write_thread ();
-    void flush_xor_blocks ();
     void write_ssblock (Block *block);
     void free_block (Block *block);
 };
