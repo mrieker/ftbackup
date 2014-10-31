@@ -6,6 +6,8 @@
 #include "ftbreader.h"
 #include "ftbwriter.h"
 
+#include <termios.h>
+
 static int cmd_backup (int argc, char **argv);
 static bool write_nanos_to_file (uint64_t nanos, char const *name);
 static uint64_t read_nanos_from_file (char const *name);
@@ -21,6 +23,12 @@ static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv);
 static int cmd_version (int argc, char **argv);
 static int cmd_xorvfy (int argc, char **argv);
+
+static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **argv, int i, bool enc);
+static CryptoPP::BlockCipher *getciphercontext (char const *name, bool enc);
+static CryptoPP::HashTransformation *gethashercontext (char const *name);
+static void usagecipherargs (char const *decenc);
+static bool readpasswd (char *pwbuff, size_t pwsize);
 
 int main (int argc, char **argv)
 {
@@ -56,12 +64,8 @@ static int cmd_backup (int argc, char **argv)
     uint32_t blocksize;
     uint64_t spansize;
 
-    ftbwriter.l2bs  = __builtin_ctz (DEFBLOCKSIZE);
-    ftbwriter.xorgc = DEFXORGC;
-    ftbwriter.xorsc = DEFXORSC;
-    blocksize = DEFBLOCKSIZE;
-    rootpath  = NULL;
-    ssname    = NULL;
+    rootpath = NULL;
+    ssname   = NULL;
 
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
@@ -74,6 +78,11 @@ static int cmd_backup (int argc, char **argv)
                     goto usage;
                 }
                 ftbwriter.l2bs = __builtin_ctz (blocksize);
+                continue;
+            }
+            if (strcasecmp (argv[i], "-encrypt") == 0) {
+                i = decodecipherargs (&ftbwriter.cripter, argc, argv, i, true);
+                if (i < 0) goto usage;
                 continue;
             }
             if (strcasecmp (argv[i], "-idirect") == 0) {
@@ -163,7 +172,7 @@ static int cmd_backup (int argc, char **argv)
     }
 
     // how many bytes needed for one span of data blocks plus their corresponding XOR blocks
-    spansize = blocksize;
+    spansize = 1 << ftbwriter.l2bs;
     if (ftbwriter.xorgc != 0) spansize *= ftbwriter.xorgc * (ftbwriter.xorsc + 1);
 
     // enforce this constraint so that each segment file starts an XOR span anew thus
@@ -183,6 +192,7 @@ usage:
     fprintf (stderr, "    -blocksize <bs>       write <bs> bytes at a time\n");
     fprintf (stderr, "                            powers-of-two, range %u..%u\n", MINBLOCKSIZE, MAXBLOCKSIZE);
     fprintf (stderr, "                            default is %u\n", DEFBLOCKSIZE);
+    usagecipherargs ("encrypt");
     fprintf (stderr, "    -idirect              use O_DIRECT when reading files\n");
     fprintf (stderr, "    -noxor                don't write any recovery blocks\n");
     fprintf (stderr, "                            default is to write recovery blocks\n");
@@ -532,6 +542,11 @@ static int cmd_list (int argc, char **argv)
     ssname = NULL;
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
+            if (strcasecmp (argv[i], "-decrypt") == 0) {
+                i = decodecipherargs (&ftblister.cripter, argc, argv, i, false);
+                if (i < 0) goto usage;
+                continue;
+            }
             if (strcasecmp (argv[i], "-simrderrs") == 0) {
                 if (++ i >= argc) goto usage;
                 ftblister.opt_simrderrs = atoi (argv[i]);
@@ -553,7 +568,8 @@ static int cmd_list (int argc, char **argv)
     return ftblister.read_saveset (ssname, "", "");
 
 usage:
-    fprintf (stderr, "usage: ftbackup list [-simrderrs <mod>] <saveset>\n");
+    fprintf (stderr, "usage: ftbackup list [-decrypt ... ] [-simrderrs <mod>] <saveset>\n");
+    usagecipherargs ("decrypt");
     return EX_CMD;
 }
 
@@ -586,6 +602,11 @@ static int cmd_restore (int argc, char **argv)
     ssname    = NULL;
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
+            if (strcasecmp (argv[i], "-decrypt") == 0) {
+                i = decodecipherargs (&ftbrestorer.cripter, argc, argv, i, false);
+                if (i < 0) goto usage;
+                continue;
+            }
             if (strcasecmp (argv[i], "-incremental") == 0) {
                 ftbrestorer.opt_incrmntl  = true;
                 ftbrestorer.opt_overwrite = true;
@@ -638,7 +659,8 @@ static int cmd_restore (int argc, char **argv)
     return ftbrestorer.read_saveset (ssname, srcprefix, dstprefix);
 
 usage:
-    fprintf (stderr, "usage: ftbackup restore [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix> <dstprefix>\n");
+    fprintf (stderr, "usage: ftbackup restore [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix> <dstprefix>\n");
+    usagecipherargs ("decrypt");
     fprintf (stderr, "        <srcprefix> = restore only files beginning with this prefix\n");
     fprintf (stderr, "                      use '' to restore all files\n");
     fprintf (stderr, "        <dstprefix> = what to replace <srcprefix> part of filename with to construct output filename\n");
@@ -671,25 +693,36 @@ static int cmd_xorvfy (int argc, char **argv)
     char const *name;
     Block baseblock, *block, *xorblk, **xorblocks;
     bool ok;
-    int fd, rc;
+    CryptoPP::BlockCipher *cripter;
+    int fd, i, rc;
     uint32_t bs, lastseqno, lastxorno, xorgn;
     uint64_t rdpos;
     uint8_t *xorcounts;
 
-    if (argc != 2) {
-        fprintf (stderr, "usage: ftbackup xorvfy <saveset>\n");
-        return EX_CMD;
+    name = NULL;
+    for (i = 0; ++ i < argc;) {
+        if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
+            if (strcasecmp (argv[i], "-decrypt") == 0) {
+                i = decodecipherargs (&cripter, argc, argv, i, false);
+                if (i < 0) goto usage;
+                continue;
+            }
+            goto usage;
+        }
+        if (name != NULL) goto usage;
+        name = argv[i];
     }
+    if (name == NULL) goto usage;
 
-    name = argv[1];
     fd = open (name, O_RDONLY);
     if (fd < 0) {
         fprintf (stderr, "open(%s) error: %s\n", name, strerror (errno));
         return EX_SSIO;
     }
 
-    rc = read (fd, &baseblock, sizeof baseblock);
-    if (rc != sizeof baseblock) {
+    block = (Block *) alloca (MINBLOCKSIZE);
+    rc = read (fd, block, MINBLOCKSIZE);
+    if (rc != MINBLOCKSIZE) {
         if (rc < 0) {
             fprintf (stderr, "read(%s) error: %s\n", name, strerror (errno));
         } else {
@@ -698,6 +731,10 @@ static int cmd_xorvfy (int argc, char **argv)
         close (fd);
         return EX_SSIO;
     }
+
+    FTBReader::decrypt_block (cripter, block, MINBLOCKSIZE);
+
+    baseblock = *block;
 
     bs = 1 << baseblock.l2bs;
 
@@ -712,6 +749,7 @@ static int cmd_xorvfy (int argc, char **argv)
     rdpos = 0;
 
     while (((rc = pread (fd, block, bs, rdpos)) >= 0) && ((uint32_t) rc == bs)) {
+        FTBReader::decrypt_block (cripter, block, bs);
         if (memcmp (block->magic, BLOCK_MAGIC, 8) != 0) {
             fprintf (stderr, "%llu: bad block magic\n", rdpos);
             goto done;
@@ -788,8 +826,27 @@ done:
     free (xorcounts);
 
     return ok ? EX_OK : EX_SSIO;
+
+usage:
+    fprintf (stderr, "usage: ftbackup xorvfy [-decrypt ...] <saveset>\n");
+    usagecipherargs ("decrypt");
+    return EX_CMD;
 }
+
 
+FTBackup::FTBackup ()
+{
+    l2bs    = __builtin_ctz (DEFBLOCKSIZE);
+    xorgc   = DEFXORGC;
+    xorsc   = DEFXORSC;
+    cripter = NULL;
+}
+
+FTBackup::~FTBackup ()
+{
+    if (cripter != NULL) delete cripter;
+}
+
 /**
  * @brief Print a backup header giving the details of a file in the saveset.
  */
@@ -934,4 +991,240 @@ uint32_t FTBackup::checksumdata (void const *src, uint32_t nby)
             : "=r" (tmp), "+r" (src), "=r" (sum), "+r" (nby)
             : : "cc", "memory");
     return sum;
+}
+
+/**
+ * @brief Decode command-line encrypt/decrypt arguments and fill in 'cripter'.
+ *          -{de,en}crypt <blockciphername> <passwordhasher> <password>
+ */
+static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **argv, int i, bool enc)
+{
+    byte *digest;
+    char keybuff[4096], *keyline, *p;
+    CryptoPP::HashTransformation *hasher;
+    FILE *keyfile;
+    size_t defkeylen;
+
+    /*
+     * Get block cipher algorithm.
+     */
+    if (++ i >= argc) return -1;
+    *cripter = getciphercontext (argv[i], enc);
+    if (*cripter == NULL) return -1;
+    defkeylen = (*cripter)->DefaultKeyLength ();
+
+    /*
+     * Get password hasher algorithm.
+     */
+    if (++ i >= argc) return -1;
+    hasher = gethashercontext (argv[i]);
+    if (hasher == NULL) return -1;
+
+    /*
+     * Get key, either directly from arg list or from a file.
+     */
+    if (++ i >= argc) return -1;
+    keyline = argv[i];
+    if (strcmp (keyline, "-") == 0) {
+        if (!readpasswd (keybuff, sizeof keybuff)) return -1;
+        keyline = keybuff;
+    } else if (keyline[0] == '@') {
+        keyfile = fopen (++ keyline, "r");
+        if (keyfile == NULL) {
+            fprintf (stderr, "ftbackup: open(%s) error: %s\n", keyline, strerror (errno));
+            return -1;
+        }
+        if (fgets (keybuff, sizeof keybuff, keyfile) == NULL) {
+            fprintf (stderr, "ftbackup: read(%s) error: %s\n", keyline, strerror (errno));
+            fclose (keyfile);
+            return -1;
+        }
+        fclose (keyfile);
+        p = strrchr (keybuff, '\n');
+        if (p == NULL) {
+            fprintf (stderr, "ftbackup: read(%s) buffer overflow\n", keyline);
+            return -1;
+        }
+        *p = 0;
+        keyline = keybuff;
+    }
+
+    /*
+     * Set up hash of the key string as the block cipher key.
+     */
+    digest = (byte *) alloca (defkeylen);
+    hasher->Update ((byte const *) keyline, (size_t) strlen (keyline));
+    hasher->TruncatedFinal (digest, defkeylen);
+    (*cripter)->SetKey (digest, defkeylen, CryptoPP::g_nullNameValuePairs);
+
+    delete hasher;
+
+    return i;
+}
+
+#include "cryptopp562/blowfish.h"
+#include "cryptopp562/camellia.h"
+#include "cryptopp562/cast.h"
+#include "cryptopp562/des.h"
+#include "cryptopp562/gost.h"
+#include "cryptopp562/idea.h"
+#include "cryptopp562/mars.h"
+#include "cryptopp562/rc2.h"
+#include "cryptopp562/rc5.h"
+#include "cryptopp562/rc6.h"
+#include "cryptopp562/rijndael.h"
+#include "cryptopp562/safer.h"
+#include "cryptopp562/seed.h"
+#include "cryptopp562/serpent.h"
+#include "cryptopp562/shark.h"
+#include "cryptopp562/skipjack.h"
+#include "cryptopp562/square.h"
+#include "cryptopp562/tea.h"
+#include "cryptopp562/twofish.h"
+
+#define CIPHLIST \
+    _CIPHOP (Blowfish)  \
+    _CIPHOP (Camellia)  \
+    _CIPHOP (CAST128)   \
+    _CIPHOP (CAST256)   \
+    _CIPHOP (DES)       \
+    _CIPHOP (DES_EDE2)  \
+    _CIPHOP (DES_EDE3)  \
+    _CIPHOP (DES_XEX3)  \
+    _CIPHOP (GOST)      \
+    _CIPHOP (IDEA)      \
+    _CIPHOP (MARS)      \
+    _CIPHOP (RC2)       \
+    _CIPHOP (RC5)       \
+    _CIPHOP (RC6)       \
+    _CIPHOP (Rijndael)  \
+    _CIPHOP (SAFER_K)   \
+    _CIPHOP (SAFER_SK)  \
+    _CIPHOP (SEED)      \
+    _CIPHOP (Serpent)   \
+    _CIPHOP (SHARK)     \
+    _CIPHOP (SKIPJACK)  \
+    _CIPHOP (Square)    \
+    _CIPHOP (TEA)       \
+    _CIPHOP (Twofish)   \
+    _CIPHOP (XTEA)
+
+static CryptoPP::BlockCipher *getciphercontext (char const *name, bool enc)
+{
+#define _CIPHOP(Name) \
+    if (strcasecmp (name, #Name) == 0) { \
+        return enc ? (CryptoPP::BlockCipher *) new CryptoPP::Name::Encryption () : (CryptoPP::BlockCipher *) new CryptoPP::Name::Decryption (); \
+    }
+    CIPHLIST
+#undef _CIPHOP
+
+    fprintf (stderr, "ftbackup: unknown cipher algorithm %s\n", name);
+#define _CIPHOP(Name) \
+    fprintf (stderr, "ftbackup:   %s\n", #Name);
+    CIPHLIST
+#undef _CIPHOP
+
+    return NULL;
+}
+
+#include "cryptopp562/ripemd.h"
+#include "cryptopp562/sha.h"
+#include "cryptopp562/tiger.h"
+#include "cryptopp562/whrlpool.h"
+
+#define HASHLIST \
+    _HASHOP (RIPEMD160) \
+    _HASHOP (RIPEMD320) \
+    _HASHOP (RIPEMD128) \
+    _HASHOP (RIPEMD256) \
+    _HASHOP (SHA1)      \
+    _HASHOP (SHA224)    \
+    _HASHOP (SHA256)    \
+    _HASHOP (SHA384)    \
+    _HASHOP (SHA512)    \
+    _HASHOP (Tiger)     \
+    _HASHOP (Whirlpool)
+
+static CryptoPP::HashTransformation *gethashercontext (char const *name)
+{
+#define _HASHOP(Name) \
+    if (strcasecmp (name, #Name) == 0) { \
+        return new CryptoPP::Name (); \
+    }
+    HASHLIST
+#undef _HASHOP
+
+    fprintf (stderr, "ftbackup: unknown hasher algorithm %s\n", name);
+#define _HASHOP(Name) \
+    fprintf (stderr, "ftbackup:   %s\n", #Name);
+    HASHLIST
+#undef _HASHOP
+    return NULL;
+}
+
+static void usagecipherargs (char const *decenc)
+{
+    fprintf (stderr, "    -%s <cipher> <hasher> <keyspec>\n", decenc);
+    fprintf (stderr, "                            cipher = block cipher algorithm (use '?' for list)\n");
+    fprintf (stderr, "                            hasher = key hasher algorithm (use '?' for list)\n");
+    fprintf (stderr, "                            keyspec = - : prompt at stdin\n");
+    fprintf (stderr, "                              @filename : read from first line of file\n");
+    fprintf (stderr, "                                   else : literal string\n");
+}
+
+static bool readpasswd (char *pwbuff, size_t pwsize)
+{
+    int rc, ttyfd;
+    struct termios nflags, oflags;
+
+    ttyfd = open ("/dev/tty", O_RDWR | O_NOCTTY);
+    if (ttyfd < 0) {
+        fprintf (stderr, "open(/dev/tty) error: %s\n", strerror (errno));
+        return false;
+    }
+
+    if (tcgetattr (ttyfd, &oflags) < 0) {
+        fprintf (stderr, "tcgetattr(/dev/tty) error: %s\n", strerror (errno));
+        goto err2;
+    }
+
+    nflags = oflags;
+    nflags.c_lflag &= ~ECHO;
+    nflags.c_lflag |= ECHONL;
+
+    if (tcsetattr (ttyfd, TCSANOW, &nflags) < 0) {
+        fprintf (stderr, "tcsetattr(/dev/tty) error: %s\n", strerror (errno));
+        goto err2;
+    }
+
+    do {
+        rc = write (ttyfd, "password: ", 10);
+        if (rc < 10) {
+            if (rc >= 0) errno = EPIPE;
+            fprintf (stderr, "write(/dev/tty) error: %s\n", strerror (errno));
+            goto err1;
+        }
+        rc = read (ttyfd, pwbuff, pwsize);
+        if (rc <= 0) {
+            if (rc == 0) errno = EPIPE;
+            fprintf (stderr, "read(/dev/tty) error: %s\n", strerror (errno));
+            goto err1;
+        }
+    } while ((rc == 1) || (pwbuff[rc-1] != '\n'));
+
+    pwbuff[--rc] = 0;
+
+    if (tcsetattr (ttyfd, TCSANOW, &oflags) < 0) {
+        fprintf (stderr, "tcsetattr(/dev/tty) error: %s\n", strerror (errno));
+        goto err2;
+    }
+
+    close (ttyfd);
+    return true;
+
+err1:
+    tcsetattr (ttyfd, TCSANOW, &oflags);
+err2:
+    close (ttyfd);
+    return false;
 }

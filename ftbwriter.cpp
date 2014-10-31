@@ -2,6 +2,16 @@
 #include "ftbackup.h"
 #include "ftbwriter.h"
 
+static void printthreadcputime (char const *name)
+{
+    int rc;
+    struct timespec tp;
+
+    rc = clock_gettime (CLOCK_THREAD_CPUTIME_ID, &tp);
+    if (rc < 0) abort ();
+    fprintf (stderr, "ftbackup: thread %s cpu time %lu.%.9lu\n", name, (ulong_t) tp.tv_sec, (ulong_t) tp.tv_nsec);
+}
+
 FTBWriter::FTBWriter ()
 {
     opt_verbose = 0;
@@ -30,14 +40,15 @@ FTBWriter::FTBWriter ()
     byteswrittentoseg = 0;
     memset (&zstrm, 0, sizeof zstrm);
 
-    compr2write = SlotQueue<Block *> ();
-    main2compr  = SlotQueue<Main2ComprSlot> ();
+    comprqueue = SlotQueue<ComprSlot> ();
+    encrqueue  = SlotQueue<Block *> ();
+    writequeue = SlotQueue<Block *> ();
 }
 
 FTBWriter::~FTBWriter ()
 {
     Block *b;
-    Main2ComprSlot m2cs;
+    ComprSlot cs;
     uint32_t i;
 
     while ((b = freeblocks) != NULL) {
@@ -73,12 +84,16 @@ FTBWriter::~FTBWriter ()
         deflateEnd (&zstrm);
     }
 
-    while (compr2write.trydequeue (&b)) {
+    while (comprqueue.trydequeue (&cs)) {
+        free (cs.buf);
+    }
+
+    while (encrqueue.trydequeue (&b)) {
         free (b);
     }
 
-    while (main2compr.trydequeue (&m2cs)) {
-        free (m2cs.buf);
+    while (writequeue.trydequeue (&b)) {
+        free (b);
     }
 }
 
@@ -90,16 +105,10 @@ FTBWriter::~FTBWriter ()
  */
 int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
 {
-    Block *b;
     bool ok;
     Header hdr;
     int rc;
-    pthread_t compr_thandl, write_thandl;
-
-    while ((b = freeblocks) != NULL) {
-        freeblocks = *(Block **)b;
-        free (b);
-    }
+    pthread_t compr_thandl, encr_thandl, write_thandl;
 
     /*
      * Open saveset file.
@@ -132,10 +141,14 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     }
 
     /*
-     * Create compression and writing threads.
+     * Create compression, encryption and writing threads.
      */
     rc = pthread_create (&compr_thandl, NULL, compr_thread_wrapper, this);
     if (rc != 0) SYSERR (pthread_create, rc);
+    if (cripter != NULL) {
+        rc = pthread_create (&encr_thandl, NULL, encr_thread_wrapper, this);
+        if (rc != 0) SYSERR (pthread_create, rc);
+    }
     rc = pthread_create (&write_thandl, NULL, write_thread_wrapper, this);
     if (rc != 0) SYSERR (pthread_create, rc);
 
@@ -151,11 +164,17 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     write_header (&hdr);
     write_queue (NULL, 0, 0);
 
+    printthreadcputime ("readfiles");
+
     /*
      * Wait for threads to finish.
      */
     rc = pthread_join (compr_thandl, NULL);
     if (rc != 0) SYSERR (pthread_join, rc);
+    if (cripter != NULL) {
+        rc = pthread_join (encr_thandl, NULL);
+        if (rc != 0) SYSERR (pthread_join, rc);
+    }
     rc = pthread_join (write_thandl, NULL);
     if (rc != 0) SYSERR (pthread_join, rc);
 
@@ -571,18 +590,18 @@ void FTBWriter::write_raw (void const *buf, uint32_t len, bool hdr)
  */
 void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
 {
-    Main2ComprSlot slot;
+    ComprSlot slot;
 
     slot.buf = buf;
     slot.len = len;
     slot.dty = dty;
 
-    main2compr.enqueue (slot);
+    comprqueue.enqueue (slot);
 }
 
 /**
- * @brief Take data from main2compr queue, optionally compress,
- *        and put in blocks for compr2write queue.
+ * @brief Take data from comprqueue queue, optionally compress,
+ *        and put in blocks for writequeue queue.
  */
 void *FTBWriter::compr_thread_wrapper (void *ftbw)
 {
@@ -592,7 +611,7 @@ void *FTBWriter::compr_thread ()
 {
     Block *block;
     int dty, rc;
-    Main2ComprSlot slot;
+    ComprSlot slot;
     uint32_t bs, len;
     void *buf;
 
@@ -609,7 +628,7 @@ void *FTBWriter::compr_thread ()
         /*
          * Get data of arbitrary length from main thread to process.
          */
-        slot = main2compr.dequeue ();
+        slot = comprqueue.dequeue ();
         buf  = slot.buf;
         len  = slot.len;
         dty  = slot.dty;
@@ -733,6 +752,8 @@ void *FTBWriter::compr_thread ()
         xorblocks = NULL;
     }
 
+    printthreadcputime ("compress");
+
     return NULL;
 }
 
@@ -843,7 +864,11 @@ void FTBWriter::queue_xor_blocks ()
  */
 void FTBWriter::queue_block (Block *block)
 {
-    compr2write.enqueue (block);
+    if (cripter != NULL) {
+        encrqueue.enqueue (block);
+    } else {
+        writequeue.enqueue (block);
+    }
 }
 
 /**
@@ -880,7 +905,93 @@ Block *FTBWriter::malloc_block ()
 }
 
 /**
- * @brief Dequeue blocks from compr_thread() and write to saveset.
+ * @brief Dequeue blocks from compr_thread(), encrypt, then queue to write_thread().
+ */
+void *FTBWriter::encr_thread_wrapper (void *ftbw)
+{
+    return ((FTBWriter *) ftbw)->encr_thread ();
+}
+void *FTBWriter::encr_thread ()
+{
+    Block *block;
+    FILE *noncefile;
+    uint32_t bsq, cbs, i;
+    uint64_t *array;
+
+    cbs = cripter->BlockSize ();
+
+    if (sizeof block->nonce != 16) abort ();
+    if (offsetof (Block, nonce) != 16) abort ();
+
+    noncefile = fopen ("/dev/urandom", "r");
+    if (noncefile == NULL) {
+        fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", strerror (errno));
+        abort ();
+    }
+
+    /*
+     * Get block size in quadwords.
+     */
+    bsq = 1 << (l2bs - 3);
+
+    /*
+     * Get a block to encrypt.
+     */
+    while ((block = encrqueue.dequeue ()) != NULL) {
+
+        /*
+         * Fill in the nonce with a random number to salt the encryption.
+         */
+        if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
+            fprintf (stderr, "read(/dev/urandom) error: %s\n", strerror (errno));
+            abort ();
+        }
+
+        /*
+         * Use nonce for init vector and encrypt the rest of the block.
+         * Leave magic number and everything else before nonce in plain text.
+         */
+        // enc[i] = encrypt ( clr[i] ^ enc[i-1] )
+        array = (uint64_t *) block;
+        switch (cbs) {
+            case 8: {
+                for (i = 4; i < bsq; i ++) {
+                    array[i] ^= array[i-1];
+                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                }
+                break;
+            }
+            case 16: {
+                for (i = 4; i < bsq; i += 2) {
+                    array[i+0] ^= array[i-2];
+                    array[i+1] ^= array[i-1];
+                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                }
+                break;
+            }
+            default: abort ();
+        }
+
+        /*
+         * Queue the encrypted block for writing to the saveset.
+         */
+        writequeue.enqueue (block);
+    }
+
+    /*
+     * Tell write_thread() it can close the saveset and exit.
+     */
+    writequeue.enqueue (NULL);
+
+    fclose (noncefile);
+
+    printthreadcputime ("encrypt");
+
+    return NULL;
+}
+
+/**
+ * @brief Dequeue blocks from compr_thread() or encr_thread() and write to saveset.
  */
 void *FTBWriter::write_thread_wrapper (void *ftbw)
 {
@@ -890,10 +1001,12 @@ void *FTBWriter::write_thread ()
 {
     Block *block;
 
-    while ((block = compr2write.dequeue ()) != NULL) {
+    while ((block = writequeue.dequeue ()) != NULL) {
         write_ssblock (block);
         free_block (block);
     }
+
+    printthreadcputime ("writesaveset");
 
     return NULL;
 }

@@ -6,7 +6,7 @@
 
 #define SQ_NSLOTS 4
 
-struct Main2ComprSlot {
+struct ComprSlot {
     void    *buf;   // address of data to write
     uint32_t len;   // length of data to write
     int      dty;   // -1: file header to be left uncompressed
@@ -61,8 +61,9 @@ private:
     uint64_t byteswrittentoseg;
     z_stream zstrm;
 
-    SlotQueue<Block *> compr2write;
-    SlotQueue<Main2ComprSlot> main2compr;
+    SlotQueue<ComprSlot> comprqueue;  // variable length data to be compressed and blocked
+    SlotQueue<Block *> encrqueue;     // blocks to be encrypted
+    SlotQueue<Block *> writequeue;    // blocks to be written to saveset
 
     bool write_file (char const *path, struct stat const *dirstat);
     bool write_regular (Header *hdr, struct stat const *dirstat);
@@ -79,6 +80,8 @@ private:
     void queue_xor_blocks ();
     void queue_block (Block *block);
     Block *malloc_block ();
+    static void *encr_thread_wrapper (void *ftbw);
+    void *encr_thread ();
     static void *write_thread_wrapper (void *ftbw);
     void *write_thread ();
     void write_ssblock (Block *block);

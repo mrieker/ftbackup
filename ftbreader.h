@@ -18,6 +18,7 @@ struct FTBReader : FTBackup {
     ~FTBReader ();
     int read_saveset (char const *ssname, char const *srcprefix, char const *dstprefix);
     virtual char *maybe_output_listing (char *dstname, Header *hdr) =0;
+    static void decrypt_block (CryptoPP::BlockCipher *cripter, Block *block, uint32_t bs);
 
 private:
     Block **xorblocks;
@@ -51,6 +52,7 @@ private:
     void read_first_block ();
     LinkedBlock *read_or_recover_block ();
     long wrapped_pread (void *buf, long len, uint64_t pos);
+    void decrypt_block (Block *block, uint32_t bs);
 };
 
 #endif

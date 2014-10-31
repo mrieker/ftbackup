@@ -874,7 +874,7 @@ nextblock:
  */
 void FTBReader::read_first_block ()
 {
-    Block *miniBlock, *tblock;
+    Block *miniBlock, *miniEncrp, *tblock;
     int rc;
     LinkedBlock *bigBlock;
     uint32_t bs, bytesCopied, i;
@@ -887,6 +887,7 @@ void FTBReader::read_first_block ()
     bs          = 0;
     bytesCopied = 0;
     miniBlock   = (Block *) alloca (MINBLOCKSIZE);
+    miniEncrp   = (Block *) alloca (MINBLOCKSIZE);
     while (true) {
 
         /*
@@ -914,7 +915,9 @@ void FTBReader::read_first_block ()
          * Found something readable, see if it has correct magic number and a valid block size field.
          * If so, it is the beginning of a bigBlock.
          */
+        memcpy (miniEncrp, miniBlock, MINBLOCKSIZE);
         if (bigBlock == NULL) {
+            decrypt_block (miniBlock, MINBLOCKSIZE);
             if (memcmp (miniBlock->magic, BLOCK_MAGIC, 8) != 0) continue;
             if (miniBlock->xorbc != 0) continue;
             l2bs = miniBlock->l2bs;
@@ -927,9 +930,9 @@ void FTBReader::read_first_block ()
         }
 
         /*
-         * Copy the mini block data to the bigBlock.
+         * Copy the (possibly encrypted) mini block data to the bigBlock.
          */
-        memcpy ((uint8_t *)&bigBlock->block + bytesCopied, miniBlock, MINBLOCKSIZE);
+        memcpy ((uint8_t *)&bigBlock->block + bytesCopied, miniEncrp, MINBLOCKSIZE);
         bytesCopied += MINBLOCKSIZE;
 
         /*
@@ -937,6 +940,7 @@ void FTBReader::read_first_block ()
          */
         if (bytesCopied < bs) continue;
         tblock = &bigBlock->block;
+        decrypt_block (tblock, bs);
         xorgc = tblock->xorgc;
         xorsc = tblock->xorsc;
         if (blockisvalid (tblock)) break;
@@ -1029,6 +1033,9 @@ noxoread:
             throw new EndOfSSFile ();
         }
 
+        // maybe decrypt the block
+        decrypt_block (&linkedBlock->block, bs);
+
         // make sure the magic number and checksum etc are valid
         // if not, treat it just like a read error
         if (!blockisvalid (&linkedBlock->block)) {
@@ -1101,6 +1108,11 @@ noxoread:
             if (linkedBlocks == NULL) throw new EndOfSSFile ();
             goto unrecoverable;
         }
+
+        /*
+         * Maybe decrypt the block.
+         */
+        decrypt_block (&linkedBlock->block, bs);
 
         /*
          * They should all have basic validity.
@@ -1350,6 +1362,46 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         if (rc == 0) break;
     }
     return ofs;
+}
+
+/**
+ * @brief Decrypt the block's contents if -decrypt option was given.
+ */
+void FTBReader::decrypt_block (Block *block, uint32_t bs)
+{
+    decrypt_block (cripter, block, bs);
+}
+
+void FTBReader::decrypt_block (CryptoPP::BlockCipher *cripter, Block *block, uint32_t bs)
+{
+    uint32_t i;
+    uint64_t *array;
+
+    if (cripter != NULL) {
+        array = (uint64_t *) block;
+
+        switch (cripter->BlockSize ()) {
+            case 8: {
+                for (i = bs / 8; -- i >= 4;) {
+                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                    array[i] ^= array[i-1];
+                }
+                break;
+            }
+            case 16: {
+                for (i = bs / 8; (i -= 2) >= 4;) {
+                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                    array[i+0] ^= array[i-2];
+                    array[i+1] ^= array[i-1];
+                }
+                break;
+            }
+            default: abort ();
+        }
+
+        // so the checksum will work
+        memset (block->nonce, 0, sizeof block->nonce);
+    }
 }
 
 /**
