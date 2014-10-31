@@ -30,22 +30,14 @@ FTBWriter::FTBWriter ()
     byteswrittentoseg = 0;
     memset (&zstrm, 0, sizeof zstrm);
 
-    memset (compr2write_slots, 0, sizeof compr2write_slots);
-    memset (main2compr_slots,  0, sizeof main2compr_slots);
-    compr2write_next = 0;
-    compr2write_used = 0;
-    main2compr_next  = 0;
-    main2compr_used  = 0;
-
-    pthread_cond_init  (&compr2write_cond,  NULL);
-    pthread_cond_init  (&main2compr_cond,   NULL);
-    pthread_mutex_init (&compr2write_mutex, NULL);
-    pthread_mutex_init (&main2compr_mutex,  NULL);
+    compr2write = SlotQueue<Block *> ();
+    main2compr  = SlotQueue<Main2ComprSlot> ();
 }
 
 FTBWriter::~FTBWriter ()
 {
     Block *b;
+    Main2ComprSlot m2cs;
     uint32_t i;
 
     while ((b = freeblocks) != NULL) {
@@ -81,16 +73,12 @@ FTBWriter::~FTBWriter ()
         deflateEnd (&zstrm);
     }
 
-    while (compr2write_used > 0) {
-        free (compr2write_slots[compr2write_next]);
-        compr2write_next = (compr2write_next) % COMPR2WRITE_NSLOTS;
-        -- compr2write_used;
+    while (compr2write.trydequeue (&b)) {
+        free (b);
     }
 
-    while (main2compr_used > 0) {
-        free (main2compr_slots[main2compr_used].buf);
-        main2compr_next = (main2compr_next) % MAIN2COMPR_NSLOTS;
-        -- main2compr_used;
+    while (main2compr.trydequeue (&m2cs)) {
+        free (m2cs.buf);
     }
 }
 
@@ -583,19 +571,13 @@ void FTBWriter::write_raw (void const *buf, uint32_t len, bool hdr)
  */
 void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
 {
-    uint32_t i;
+    Main2ComprSlot slot;
 
-    pthread_mutex_lock (&main2compr_mutex);
-    while (main2compr_used >= MAIN2COMPR_NSLOTS) {
-        pthread_cond_wait (&main2compr_cond, &main2compr_mutex);
-    }
-    i = (main2compr_next + main2compr_used) % MAIN2COMPR_NSLOTS;
-    main2compr_slots[i].buf = buf;
-    main2compr_slots[i].len = len;
-    main2compr_slots[i].dty = dty;
-    main2compr_used ++;
-    pthread_cond_signal (&main2compr_cond);
-    pthread_mutex_unlock (&main2compr_mutex);
+    slot.buf = buf;
+    slot.len = len;
+    slot.dty = dty;
+
+    main2compr.enqueue (slot);
 }
 
 /**
@@ -610,7 +592,8 @@ void *FTBWriter::compr_thread ()
 {
     Block *block;
     int dty, rc;
-    uint32_t bs, i, len;
+    Main2ComprSlot slot;
+    uint32_t bs, len;
     void *buf;
 
     block = NULL;
@@ -626,19 +609,10 @@ void *FTBWriter::compr_thread ()
         /*
          * Get data of arbitrary length from main thread to process.
          */
-        pthread_mutex_lock (&main2compr_mutex);
-        while (main2compr_used == 0) {
-            pthread_cond_wait (&main2compr_cond, &main2compr_mutex);
-        }
-        i = main2compr_next;
-        buf = main2compr_slots[i].buf;
-        len = main2compr_slots[i].len;
-        dty = main2compr_slots[i].dty;
-        main2compr_next = (i + 1) % MAIN2COMPR_NSLOTS;
-        if (-- main2compr_used == MAIN2COMPR_NSLOTS - 1) {
-            pthread_cond_signal (&main2compr_cond);
-        }
-        pthread_mutex_unlock (&main2compr_mutex);
+        slot = main2compr.dequeue ();
+        buf  = slot.buf;
+        len  = slot.len;
+        dty  = slot.dty;
 
         /*
          * Maybe compress it to fixed-size blocks.
@@ -869,18 +843,7 @@ void FTBWriter::queue_xor_blocks ()
  */
 void FTBWriter::queue_block (Block *block)
 {
-    uint32_t i;
-
-    pthread_mutex_lock (&compr2write_mutex);
-    while (compr2write_used == COMPR2WRITE_NSLOTS) {
-        pthread_cond_wait (&compr2write_cond, &compr2write_mutex);
-    }
-    i = (compr2write_next + compr2write_used) % COMPR2WRITE_NSLOTS;
-    compr2write_slots[i] = block;
-    if (++ compr2write_used == 1) {
-        pthread_cond_signal (&compr2write_cond);
-    }
-    pthread_mutex_unlock (&compr2write_mutex);
+    compr2write.enqueue (block);
 }
 
 /**
@@ -926,33 +889,8 @@ void *FTBWriter::write_thread_wrapper (void *ftbw)
 void *FTBWriter::write_thread ()
 {
     Block *block;
-    uint32_t i;
 
-    while (true) {
-
-        /*
-         * Dequeue a block, waiting if queue is empty.
-         */
-        pthread_mutex_lock (&compr2write_mutex);
-        while (compr2write_used == 0) {
-            pthread_cond_wait (&compr2write_cond, &compr2write_mutex);
-        }
-        i = compr2write_next;
-        block = compr2write_slots[i];
-        compr2write_next = (i + 1) % COMPR2WRITE_NSLOTS;
-        if (-- compr2write_used == COMPR2WRITE_NSLOTS - 1) {
-            pthread_cond_signal (&compr2write_cond);
-        }
-        pthread_mutex_unlock (&compr2write_mutex);
-
-        /*
-         * Special case of NULL block means we are done!
-         */
-        if (block == NULL) break;
-
-        /*
-         * Write block to saveset file then free it for re-use.
-         */
+    while ((block = compr2write.dequeue ()) != NULL) {
         write_ssblock (block);
         free_block (block);
     }
@@ -1009,4 +947,77 @@ void FTBWriter::free_block (Block *block)
         : "+m" (freeblocks)
         : "r" (block)
         : "rax", "cc", "memory");
+}
+
+/**
+ * @brief Slotted queue implementation.
+ */
+
+template <class T>
+SlotQueue<T>::SlotQueue ()
+{
+    memset (slots, 0, sizeof slots);
+    pthread_cond_init  (&cond,  NULL);
+    pthread_mutex_init (&mutex, NULL);
+    next = 0;
+    used = 0;
+}
+
+template <class T>
+void SlotQueue<T>::enqueue (T slot)
+{
+    uint32_t i;
+
+    pthread_mutex_lock (&mutex);
+    while (used == SQ_NSLOTS) {
+        pthread_cond_wait (&cond, &mutex);
+    }
+    i = (next + used) % SQ_NSLOTS;
+    slots[i] = slot;
+    if (++ used == 1) {
+        pthread_cond_signal (&cond);
+    }
+    pthread_mutex_unlock (&mutex);
+}
+
+template <class T>
+bool SlotQueue<T>::trydequeue (T *slot)
+{
+    bool suc;
+    uint32_t i;
+
+    pthread_mutex_lock (&mutex);
+    suc = (used != 0);
+    if (suc) {
+        i = next;
+        *slot = slots[i];
+        next = (i + 1) % SQ_NSLOTS;
+        if (-- used == SQ_NSLOTS - 1) {
+            pthread_cond_signal (&cond);
+        }
+    }
+    pthread_mutex_unlock (&mutex);
+
+    return suc;
+}
+
+template <class T>
+T SlotQueue<T>::dequeue ()
+{
+    T slot;
+    uint32_t i;
+
+    pthread_mutex_lock (&mutex);
+    while (used == 0) {
+        pthread_cond_wait (&cond, &mutex);
+    }
+    i = next;
+    slot = slots[i];
+    next = (i + 1) % SQ_NSLOTS;
+    if (-- used == SQ_NSLOTS - 1) {
+        pthread_cond_signal (&cond);
+    }
+    pthread_mutex_unlock (&mutex);
+
+    return slot;
 }

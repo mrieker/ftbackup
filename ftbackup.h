@@ -16,8 +16,6 @@
 #include <unistd.h>
 #include <zlib.h>
 
-#define MAIN2COMPR_NSLOTS 4
-#define COMPR2WRITE_NSLOTS 4
 #define PAGESIZE (4096U)
 #define MINBLOCKSIZE PAGESIZE
 #define DEFBLOCKSIZE (32768U)

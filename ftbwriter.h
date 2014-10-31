@@ -4,12 +4,29 @@
 
 #include "ftbackup.h"
 
+#define SQ_NSLOTS 4
+
 struct Main2ComprSlot {
     void    *buf;   // address of data to write
     uint32_t len;   // length of data to write
     int      dty;   // -1: file header to be left uncompressed
                     //  0: data to be left uncompressed
                     //  1: data to be compressed
+};
+
+template <class T>
+struct SlotQueue {
+    SlotQueue ();
+    void enqueue (T slot);
+    bool trydequeue (T *slot);
+    T dequeue ();
+
+private:
+    T slots[SQ_NSLOTS];
+    pthread_cond_t  cond;
+    pthread_mutex_t mutex;
+    uint32_t next;
+    uint32_t used;
 };
 
 struct FTBWriter : FTBackup {
@@ -44,16 +61,8 @@ private:
     uint64_t byteswrittentoseg;
     z_stream zstrm;
 
-    Block          *compr2write_slots[COMPR2WRITE_NSLOTS];
-    Main2ComprSlot  main2compr_slots[MAIN2COMPR_NSLOTS];
-    pthread_cond_t  compr2write_cond;
-    pthread_cond_t  main2compr_cond;
-    pthread_mutex_t compr2write_mutex;
-    pthread_mutex_t main2compr_mutex;
-    uint32_t        compr2write_next;
-    uint32_t        compr2write_used;
-    uint32_t        main2compr_next;
-    uint32_t        main2compr_used;
+    SlotQueue<Block *> compr2write;
+    SlotQueue<Main2ComprSlot> main2compr;
 
     bool write_file (char const *path, struct stat const *dirstat);
     bool write_regular (Header *hdr, struct stat const *dirstat);
