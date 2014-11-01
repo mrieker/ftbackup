@@ -3,6 +3,7 @@
 #define _FTBWRITER_H
 
 #include "ftbackup.h"
+#include "ifsaccess.h"
 
 #define SQ_NSLOTS 4
 
@@ -36,6 +37,8 @@ struct FTBWriter : FTBackup {
     int opt_verbsec;
     uint64_t opt_segsize;
     uint64_t opt_since;
+
+    IFSAccess *tfs;     // target filesystem, ie, filesystem being backed up
 
     FTBWriter ();
     ~FTBWriter ();

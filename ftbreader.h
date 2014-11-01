@@ -3,16 +3,14 @@
 #define _FTBREADER_H
 
 #include "ftbackup.h"
-
-struct LinkedBlock {
-    LinkedBlock *next;
-    Block block;
-};
+#include "ifsaccess.h"
 
 struct FTBReader : FTBackup {
     bool opt_incrmntl;
     bool opt_overwrite;
     uint32_t opt_simrderrs;
+
+    IFSAccess *tfs;     // target filesystem, ie, filesystem being restored to
 
     FTBReader ();
     ~FTBReader ();
@@ -21,6 +19,11 @@ struct FTBReader : FTBackup {
     static void decrypt_block (CryptoPP::BlockCipher *cripter, Block *block, uint32_t bs);
 
 private:
+    struct LinkedBlock {
+        LinkedBlock *next;
+        Block block;
+    };
+
     Block **xorblocks;
     bool wprwrite;
     bool zisopen;

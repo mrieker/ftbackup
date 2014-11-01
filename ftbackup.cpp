@@ -30,6 +30,83 @@ static CryptoPP::HashTransformation *gethashercontext (char const *name);
 static void usagecipherargs (char const *decenc);
 static bool readpasswd (char *pwbuff, size_t pwsize);
 
+/**
+ * @brief A spot for IFSAccess typeinfo and vtable.
+ */
+IFSAccess::~IFSAccess () { }
+
+/**
+ * @brief All accesses to the filesystem are passed through to corresponding system calls.
+ */
+struct FullFSAccess : IFSAccess {
+    FullFSAccess ();
+
+    virtual int fsopen (char const *name, int flags, int mode=0) { return open (name, flags, mode); }
+    virtual int fsclose (int fd) { return close (fd); }
+    virtual int fsread (int fd, void *buf, int len) { return read (fd, buf, len); }
+    virtual int fspread (int fd, void *buf, int len, uint64_t pos) { return pread (fd, buf, len, pos); }
+    virtual int fswrite (int fd, void const *buf, int len) { return write (fd, buf, len); }
+    virtual int fsfstat (int fd, struct stat *buf) { return fstat (fd, buf); }
+    virtual int fsstat (char const *name, struct stat *buf) { return stat (name, buf); }
+    virtual int fslstat (char const *name, struct stat *buf) { return lstat (name, buf); }
+    virtual int fslutimes (char const *name, struct timespec *times) {
+        return utimensat (AT_FDCWD, name, times, AT_SYMLINK_NOFOLLOW);
+    }
+    virtual int fslchown (char const *name, int uid, int gid) { return lchown (name, uid, gid); }
+    virtual int fschmod (char const *name, mode_t mode) { return chmod (name, mode); }
+    virtual int fsunlink (char const *name) { return unlink (name); }
+    virtual int fslink (char const *oldname, char const *newname) { return link (oldname, newname); }
+    virtual int fssymlink (char const *oldname, char const *newname) { return symlink (oldname, newname); }
+    virtual int fsreadlink (char const *name, char *buf, int len) { return readlink (name, buf, len); }
+    virtual int fsscandir (char const *dirname, struct dirent ***names, 
+            int (*filter)(const struct dirent *),
+            int (*compar)(const struct dirent **, const struct dirent **)) {
+        return scandir (dirname, names, filter, compar);
+    }
+    virtual int fsmkdir (char const *dirname, mode_t mode) { return mkdir (dirname, mode); }
+    virtual int fsmknod (char const *name, mode_t mode, dev_t dev) { return mknod (name, mode, dev); }
+    virtual DIR *fsopendir (char const *name) { return opendir (name); }
+    virtual struct dirent *fsreaddir (DIR *dir) { return readdir (dir); }
+    virtual void fsclosedir (DIR *dir) { closedir (dir); }
+};
+
+FullFSAccess::FullFSAccess () { }
+static FullFSAccess fullFSAccess;
+
+/**
+ * @brief All accesses to the filesystem are returned as 'not implemented' errors.
+ */
+struct NullFSAccess : IFSAccess {
+    NullFSAccess ();
+
+    virtual int fsopen (char const *name, int flags, int mode=0) { errno = ENOSYS; return -1; }
+    virtual int fsclose (int fd) { errno = ENOSYS; return -1; }
+    virtual int fsread (int fd, void *buf, int len) { errno = ENOSYS; return -1; }
+    virtual int fspread (int fd, void *buf, int len, uint64_t pos) { errno = ENOSYS; return -1; }
+    virtual int fswrite (int fd, void const *buf, int len) { errno = ENOSYS; return -1; }
+    virtual int fsfstat (int fd, struct stat *buf) { errno = ENOSYS; return -1; }
+    virtual int fsstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
+    virtual int fslstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
+    virtual int fslutimes (char const *name, struct timespec *times) { errno = ENOSYS; return -1; }
+    virtual int fslchown (char const *name, int uid, int gid) { errno = ENOSYS; return -1; }
+    virtual int fschmod (char const *name, mode_t mode) { errno = ENOSYS; return -1; }
+    virtual int fsunlink (char const *name) { errno = ENOSYS; return -1; }
+    virtual int fslink (char const *oldname, char const *newname) { errno = ENOSYS; return -1; }
+    virtual int fssymlink (char const *oldname, char const *newname) { errno = ENOSYS; return -1; }
+    virtual int fsreadlink (char const *name, char *buf, int len) { errno = ENOSYS; return -1; }
+    virtual int fsscandir (char const *dirname, struct dirent ***names, 
+            int (*filter)(const struct dirent *),
+            int (*compar)(const struct dirent **, const struct dirent **)) { errno = ENOSYS; return -1; }
+    virtual int fsmkdir (char const *dirname, mode_t mode) { errno = ENOSYS; return -1; }
+    virtual int fsmknod (char const *name, mode_t mode, dev_t dev) { errno = ENOSYS; return -1; }
+    virtual DIR *fsopendir (char const *name) { errno = ENOSYS; return NULL; }
+    virtual struct dirent *fsreaddir (DIR *dir) { errno = ENOSYS; return NULL; }
+    virtual void fsclosedir (DIR *dir) { }
+};
+
+NullFSAccess::NullFSAccess () { }
+static NullFSAccess nullFSAccess;
+
 int main (int argc, char **argv)
 {
     setlinebuf (stdout);
@@ -185,6 +262,7 @@ static int cmd_backup (int argc, char **argv)
     }
 
     // write saveset...
+    ftbwriter.tfs = &fullFSAccess;
     return ftbwriter.write_saveset (ssname, rootpath);
 
 usage:
@@ -565,6 +643,7 @@ static int cmd_list (int argc, char **argv)
         fprintf (stderr, "ftbackup: missing <saveset>\n");
         goto usage;
     }
+    ftblister.tfs = &nullFSAccess;
     return ftblister.read_saveset (ssname, "", "");
 
 usage:
@@ -656,6 +735,7 @@ static int cmd_restore (int argc, char **argv)
         fprintf (stderr, "ftbackup: missing required arguments\n");
         goto usage;
     }
+    ftbrestorer.tfs = &fullFSAccess;
     return ftbrestorer.read_saveset (ssname, srcprefix, dstprefix);
 
 usage:

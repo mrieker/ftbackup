@@ -21,8 +21,8 @@ struct LostSSBlock {
 static uint32_t findnextsegno (char const *basename, uint32_t lastsegno);
 static void slashtonull (char *buf, int len);
 static void nulltoslash (char *buf, int len);
-static void updatetimes (char const *name, uint64_t atimns, uint64_t mtimns);
-static bool rmdirentry  (char const *dirname, char const *entname);
+static void updatetimes (IFSAccess *ifsa, char const *name, uint64_t atimns, uint64_t mtimns);
+static bool rmdirentry  (IFSAccess *ifsa, char const *dirname, char const *entname);
 
 FTBReader::FTBReader ()
 {
@@ -237,7 +237,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                     read_raw (hdr->name, hdr->nameln, false);
 
                     /*
-                     * See if file is selected and create destination filename.
+                     * See if file is selected and create destination filename string.
                      */
                     dstname = NULL;
                     slashtonull (hdr->name, hdr->nameln - 1);
@@ -257,7 +257,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                     while ((dstname != NULL) && ((dirTime = dirTimes) != NULL) &&
                             (memcmp (dstname, dirTime->name, dirTime->nameln) > 0)) {
                         dirTimes = dirTime->next;
-                        updatetimes (dirTime->name, dirTime->atimns, dirTime->mtimns);
+                        updatetimes (tfs, dirTime->name, dirTime->atimns, dirTime->mtimns);
                         free (dirTime);
                     }
 
@@ -284,10 +284,10 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                      * If restored successfully, try to set ownership, protection and times.
                      */
                     if (thisok && (dstname != NULL)) {
-                        lchown (dstname, hdr->ownuid, hdr->owngid);
-                        if (!S_ISLNK (hdr->stmode)) chmod (dstname, hdr->stmode);
+                        tfs->fslchown (dstname, hdr->ownuid, hdr->owngid);
+                        if (!S_ISLNK (hdr->stmode)) tfs->fschmod (dstname, hdr->stmode);
                         if (!S_ISDIR (hdr->stmode)) {
-                            updatetimes (dstname, hdr->atimns, hdr->mtimns);
+                            updatetimes (tfs, dstname, hdr->atimns, hdr->mtimns);
                         } else if (setimes) {
                             cmp = strlen (dstname);
                             dirTime = (DirTime *) malloc (cmp + sizeof *dirTime);
@@ -332,7 +332,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
          */
         while ((dirTime = dirTimes) != NULL) {
             dirTimes = dirTime->next;
-            updatetimes (dirTime->name, dirTime->atimns, dirTime->mtimns);
+            updatetimes (tfs, dirTime->name, dirTime->atimns, dirTime->mtimns);
             free (dirTime);
         }
 
@@ -378,8 +378,8 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
                 fprintf (stderr, "ftbackup: hardlink %s missing old file %u\n", hdr->name, oldfileno);
                 return false;
             }
-            if (opt_overwrite) unlink (dstname);
-            if (link (inodesname[oldfileno], dstname) < 0) {
+            if (opt_overwrite) tfs->fsunlink (dstname);
+            if (tfs->fslink (inodesname[oldfileno], dstname) < 0) {
                 fprintf (stderr, "ftbackup: link(%s, %s) error: %s\n", inodesname[oldfileno], dstname, strerror (errno));
                 return false;
             }
@@ -394,13 +394,13 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
     if (dstname == NULL) {
         fd = -1;
     } else {
-        if (opt_overwrite) unlink (dstname);
-        fd = open (dstname, O_WRONLY | O_CREAT | O_EXCL, hdr->stmode);
+        if (opt_overwrite) tfs->fsunlink (dstname);
+        fd = tfs->fsopen (dstname, O_WRONLY | O_CREAT | O_EXCL, hdr->stmode);
         if (fd < 0) {
             fprintf (stderr, "ftbackup: creat(%s) error: %s\n", dstname, strerror (errno));
-        } else if (fstat (fd, &statbuf) < 0) {
+        } else if (tfs->fsfstat (fd, &statbuf) < 0) {
             fprintf (stderr, "ftbackup: fstat(%s) error: %s\n", dstname, strerror (errno));
-            close (fd);
+            tfs->fsclose (fd);
             fd = -1;
         } else {
             if (inodessize <= hdr->fileno) {
@@ -427,10 +427,10 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
             read_raw (buf, len, true);
             if (fd >= 0) {
                 for (wofs = 0; wofs < len; wofs += rc) {
-                    rc = write (fd, buf + wofs, len - wofs);
+                    rc = tfs->fswrite (fd, buf + wofs, len - wofs);
                     if (rc <= 0) {
                         fprintf (stderr, "ftbackup: write(%s) error: %s\n", dstname, ((rc == 0) ? "end of file" : strerror (errno)));
-                        close (fd);
+                        tfs->fsclose (fd);
                         fd = -1;
                         break;
                     }
@@ -445,6 +445,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
          */
         if (fd >= 0) {
             fprintf (stderr, "ftbackup: file %s corrupt due to unrecoverable saveset media errors\n", dstname);
+            tfs->fsclose (fd);
         }
 
         throw;
@@ -453,7 +454,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
     /*
      * Done writing, close file.
      */
-    if ((fd >= 0) && (close (fd) < 0)) {
+    if ((fd >= 0) && (tfs->fsclose (fd) < 0)) {
         fprintf (stderr, "ftbackup: close(%s) error %s\n", dstname, strerror (errno));
         fd = -1;
     }
@@ -484,7 +485,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
      */
     ok = true;
     if (dstname != NULL) {
-        *setimes = mkdir (dstname, hdr->stmode) >= 0;
+        *setimes = tfs->fsmkdir (dstname, hdr->stmode) >= 0;
         if (!*setimes && (errno != EEXIST)) {
             fprintf (stderr, "ftbackup: mkdir(%s) error: %s\n", dstname, strerror (errno));
             ok = false;
@@ -501,7 +502,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
     names = NULL;
     nents = 0;
     if (opt_incrmntl && (dstname != NULL)) {
-        nents = scandir (dstname, &names, NULL, alphasort);
+        nents = tfs->fsscandir (dstname, &names, NULL, alphasort);
         if (nents < 0) {
             fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dstname, strerror (errno));
             names = NULL;
@@ -612,7 +613,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
              * backed up name.
              */
             while ((ient < nents) && (strcmp (names[ient]->d_name, buf + 1) < 0)) {
-                rmdirentry (dstname, names[ient]->d_name);
+                rmdirentry (tfs, dstname, names[ient]->d_name);
                 free (names[ient++]);
             }
 
@@ -628,7 +629,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
          * Delete any existing directory entries beyond the end of those in the backup.
          */
         while (ient < nents) {
-            rmdirentry (dstname, names[ient]->d_name);
+            rmdirentry (tfs, dstname, names[ient]->d_name);
             free (names[ient++]);
         }
     } catch (...) {
@@ -664,8 +665,8 @@ bool FTBReader::read_symlink (Header *hdr, char const *dstname)
     link[hdr->size] = 0;
 
     if (dstname != NULL) {
-        if (opt_overwrite) unlink (dstname);
-        if (symlink (link, dstname) < 0) {
+        if (opt_overwrite) tfs->fsunlink (dstname);
+        if (tfs->fssymlink (link, dstname) < 0) {
             fprintf (stderr, "ftbackup: symlink(%s) error: %s\n", dstname, strerror (errno));
             return false;
         }
@@ -687,8 +688,8 @@ bool FTBReader::read_special (Header *hdr, char const *dstname)
     read_raw (&rdev, sizeof rdev, false);
 
     if (dstname != NULL) {
-        if (opt_overwrite) unlink (dstname);
-        if (mknod (dstname, hdr->stmode, rdev) < 0) {
+        if (opt_overwrite) tfs->fsunlink (dstname);
+        if (tfs->fsmknod (dstname, hdr->stmode, rdev) < 0) {
             fprintf (stderr, "ftbackup: mknod(%s) error: %s\n", dstname, strerror (errno));
             return false;
         }
@@ -980,7 +981,7 @@ void FTBReader::read_first_block ()
  *                xorblocks, gotxors updated
  *                possibly intermediate blocks stacked on linkedBlocks
  */
-LinkedBlock *FTBReader::read_or_recover_block ()
+FTBReader::LinkedBlock *FTBReader::read_or_recover_block ()
 {
     int rc;
     LinkedBlock *linkedBlock, **lLinkedBlock;
@@ -1501,7 +1502,7 @@ static void nulltoslash (char *buf, int len)
 /**
  * @brief Try to set a file's last access and last modification times.
  */
-static void updatetimes (char const *name, uint64_t atimns, uint64_t mtimns)
+static void updatetimes (IFSAccess *ifsa, char const *name, uint64_t atimns, uint64_t mtimns)
 {
     struct timespec times[2];
 
@@ -1510,7 +1511,7 @@ static void updatetimes (char const *name, uint64_t atimns, uint64_t mtimns)
     times[0].tv_nsec = atimns % 1000000000;
     times[1].tv_sec  = mtimns / 1000000000;
     times[1].tv_nsec = mtimns % 1000000000;
-    utimensat (AT_FDCWD, name, times, AT_SYMLINK_NOFOLLOW);
+    ifsa->fslutimes (name, times);
 }
 
 /**
@@ -1519,7 +1520,7 @@ static void updatetimes (char const *name, uint64_t atimns, uint64_t mtimns)
  * @param entname = name of entry to remove
  * @returns true iff the entry was removed
  */
-static bool rmdirentry (char const *dirname, char const *entname)
+static bool rmdirentry (IFSAccess *ifsa, char const *dirname, char const *entname)
 {
     char name[strlen(dirname)+strlen(entname)+2];
     DIR *dir;
@@ -1530,16 +1531,16 @@ static bool rmdirentry (char const *dirname, char const *entname)
 
     sprintf (name, "%s/%s", dirname, entname);
 
-    if (unlink (name) >= 0) return true;
+    if (ifsa->fsunlink (name) >= 0) return true;
 
     do {
         ndel = 0;
-        dir = opendir (name);
+        dir = ifsa->fsopendir (name);
         if (dir != NULL) {
-            while ((ent = readdir (dir)) != NULL) {
-                ndel |= rmdirentry (name, ent->d_name);
+            while ((ent = ifsa->fsreaddir (dir)) != NULL) {
+                ndel |= rmdirentry (ifsa, name, ent->d_name);
             }
-            closedir (dir);
+            ifsa->fsclosedir (dir);
         }
     } while (ndel);
 

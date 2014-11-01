@@ -159,6 +159,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
 
     /*
      * Write EOF mark.
+     * Also tells threads to flush and terminate.
      */
     memset (&hdr, 0, sizeof hdr);
     write_header (&hdr);
@@ -206,7 +207,7 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
     /*
      * See what type of thing we are dealing with.
      */
-    if (lstat (path, &statbuf) < 0) {
+    if (tfs->fslstat (path, &statbuf) < 0) {
         fprintf (stderr, "ftbackup: lstat(%s) error: %s\n", path, strerror (errno));
         return false;
     }
@@ -295,8 +296,8 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     /*
      * Make sure we can open the file before writing header.
      */
-    fd = open (hdr->name, O_RDONLY | O_NOATIME | ioptions);
-    if (fd < 0) fd = open (hdr->name, O_RDONLY | ioptions);
+    fd = tfs->fsopen (hdr->name, O_RDONLY | O_NOATIME | ioptions);
+    if (fd < 0) fd = tfs->fsopen (hdr->name, O_RDONLY | ioptions);
     if (fd < 0) {
         fprintf (stderr, "ftbackup: open(%s) error: %s\n", hdr->name, strerror (errno));
         return true;
@@ -320,7 +321,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
         rc  = posix_memalign ((void **)&buf, PAGESIZE, len);
         if (rc != 0) NOMEM ();
         if (ok) {
-            rc = read (fd, buf, len);
+            rc = tfs->fsread (fd, buf, len);
             if (rc <= 0) {
                 fprintf (stderr, "ftbackup: read(%s@0x%llX) error: %s\n", hdr->name, ofs, ((rc == 0) ? "end of file" : strerror (errno)));
                 ok = false;
@@ -362,7 +363,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     /*
      * If different mtime than when started, output warning message.
      */
-    if (fstat (fd, &statend) < 0) {
+    if (tfs->fsfstat (fd, &statend) < 0) {
         fprintf (stderr, "ftbackup: fstat(%s) at end of backup error: %s\n", hdr->name, strerror (errno));
     } else if (NANOTIME (statend.st_mtim) > NANOTIME (statbuf->st_mtim)) {
         fprintf (stderr, "ftbackup: file %s modified during processing\n", hdr->name);
@@ -390,7 +391,7 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     /*
      * Read and sort the directory contents.
      */
-    nents = scandir (hdr->name, &names, NULL, alphasort);
+    nents = tfs->fsscandir (hdr->name, &names, NULL, alphasort);
     if (nents < 0) {
         fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", hdr->name, strerror (errno));
         return false;
@@ -518,7 +519,7 @@ bool FTBWriter::write_symlink (Header *hdr)
     buf = (char *) malloc (hdr->size + 1);
     while (true) {
         if (buf == NULL) NOMEM ();
-        rc = readlink (hdr->name, buf, hdr->size + 1);
+        rc = tfs->fsreadlink (hdr->name, buf, hdr->size + 1);
         if (rc < 0) {
             fprintf (stderr, "ftbackup: readlink(%s) error: %s\n", hdr->name, strerror (errno));
             return false;
