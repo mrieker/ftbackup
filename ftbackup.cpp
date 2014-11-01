@@ -228,7 +228,7 @@ static bool write_nanos_to_file (uint64_t nanos, char const *name)
     struct tm structtm;
 
     if (nanos == 0) {
-        if (clock_gettime (CLOCK_REALTIME, &structts) < 0) abort ();
+        if (clock_gettime (CLOCK_REALTIME, &structts) < 0) SYSERRNO (clock_gettime);
     } else {
         structts.tv_sec  = nanos / 1000000000;
         structts.tv_nsec = nanos % 1000000000;

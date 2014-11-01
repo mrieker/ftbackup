@@ -185,7 +185,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
         }
     }
 
-    if (fstat (ssfd, &ssstat) < 0) abort ();
+    if (fstat (ssfd, &ssstat) < 0) SYSERRNO (fstat);
 
     try {
 
@@ -1289,7 +1289,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         }
 
         if (wprwrite) {
-            if (gettimeofday (&nowtv, NULL) < 0) abort ();
+            if (gettimeofday (&nowtv, NULL) < 0) SYSERRNO (gettimeofday);
             fprintf (wprfile, "%llu %lu %lu\n", pos, nowtv.tv_sec, nowtv.tv_usec);
         }
 
@@ -1334,7 +1334,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         /*
          * We should always be able to get its size and what type of file it is.
          */
-        if (!fstat (ssfd, &ssstat) < 0) abort ();
+        if (!fstat (ssfd, &ssstat) < 0) SYSERRNO (fstat);
 
         /*
          * Save what position within all segments this segment starts at.

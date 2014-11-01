@@ -8,7 +8,7 @@ static void printthreadcputime (char const *name)
     struct timespec tp;
 
     rc = clock_gettime (CLOCK_THREAD_CPUTIME_ID, &tp);
-    if (rc < 0) abort ();
+    if (rc < 0) SYSERRNO (clock_gettime);
     fprintf (stderr, "ftbackup: thread %s cpu time %lu.%.9lu\n", name, (ulong_t) tp.tv_sec, (ulong_t) tp.tv_nsec);
 }
 

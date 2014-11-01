@@ -40,7 +40,8 @@
 #define INTERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error %d\n", err); abort (); } while (0)
 #define NANOTIME(tv) ((tv).tv_sec * 1000000000ULL + (tv).tv_nsec)
 #define NOMEM() do { fprintf (stderr, "ftbackup: out of memory\n"); abort (); } while (0)
-#define SYSERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error: %s\n", strerror (errno)); abort (); } while (0)
+#define SYSERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error: %s\n", strerror (err)); abort (); } while (0)
+#define SYSERRNO(name) SYSERR(name,errno)
 
 typedef unsigned int uint32_t;
 typedef unsigned char uint8_t;
