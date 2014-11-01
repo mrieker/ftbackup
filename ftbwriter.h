@@ -3,17 +3,8 @@
 #define _FTBWRITER_H
 
 #include "ftbackup.h"
-#include "ifsaccess.h"
 
 #define SQ_NSLOTS 4
-
-struct ComprSlot {
-    void    *buf;   // address of data to write
-    uint32_t len;   // length of data to write
-    int      dty;   // -1: file header to be left uncompressed
-                    //  0: data to be left uncompressed
-                    //  1: data to be compressed
-};
 
 template <class T>
 struct SlotQueue {
@@ -45,6 +36,14 @@ struct FTBWriter : FTBackup {
     int write_saveset (char const *ssname, char const *rootpath);
 
 private:
+    struct ComprSlot {
+        void    *buf;   // address of data to write
+        uint32_t len;   // length of data to write
+        int      dty;   // -1: file header to be left uncompressed
+                        //  0: data to be left uncompressed
+                        //  1: data to be compressed
+    };
+
     Block *volatile freeblocks;
     Block **xorblocks;
     bool zisopen;

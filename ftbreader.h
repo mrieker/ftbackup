@@ -3,7 +3,6 @@
 #define _FTBREADER_H
 
 #include "ftbackup.h"
-#include "ifsaccess.h"
 
 struct FTBReader : FTBackup {
     bool opt_incrmntl;

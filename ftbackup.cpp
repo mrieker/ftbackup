@@ -12,6 +12,8 @@ static int cmd_backup (int argc, char **argv);
 static bool write_nanos_to_file (uint64_t nanos, char const *name);
 static uint64_t read_nanos_from_file (char const *name);
 
+static int cmd_compare (int argc, char **argv);
+
 static int cmd_diff (int argc, char **argv);
 static bool diff_file (char const *path1, char const *path2);
 static bool diff_regular (char const *path1, char const *path2);
@@ -41,8 +43,9 @@ IFSAccess::~IFSAccess () { }
 struct FullFSAccess : IFSAccess {
     FullFSAccess ();
 
-    virtual int fsopen (char const *name, int flags, int mode=0) { return open (name, flags, mode); }
+    virtual int fsopen (char const *name, int flags, mode_t mode=0) { return open (name, flags, mode); }
     virtual int fsclose (int fd) { return close (fd); }
+    virtual int fsftruncate (int fd, uint64_t len) { return ftruncate (fd, len); }
     virtual int fsread (int fd, void *buf, int len) { return read (fd, buf, len); }
     virtual int fspread (int fd, void *buf, int len, uint64_t pos) { return pread (fd, buf, len, pos); }
     virtual int fswrite (int fd, void const *buf, int len) { return write (fd, buf, len); }
@@ -52,9 +55,10 @@ struct FullFSAccess : IFSAccess {
     virtual int fslutimes (char const *name, struct timespec *times) {
         return utimensat (AT_FDCWD, name, times, AT_SYMLINK_NOFOLLOW);
     }
-    virtual int fslchown (char const *name, int uid, int gid) { return lchown (name, uid, gid); }
+    virtual int fslchown (char const *name, uid_t uid, gid_t gid) { return lchown (name, uid, gid); }
     virtual int fschmod (char const *name, mode_t mode) { return chmod (name, mode); }
     virtual int fsunlink (char const *name) { return unlink (name); }
+    virtual int fsrmdir (char const *name) { return rmdir (name); }
     virtual int fslink (char const *oldname, char const *newname) { return link (oldname, newname); }
     virtual int fssymlink (char const *oldname, char const *newname) { return symlink (oldname, newname); }
     virtual int fsreadlink (char const *name, char *buf, int len) { return readlink (name, buf, len); }
@@ -64,7 +68,7 @@ struct FullFSAccess : IFSAccess {
         return scandir (dirname, names, filter, compar);
     }
     virtual int fsmkdir (char const *dirname, mode_t mode) { return mkdir (dirname, mode); }
-    virtual int fsmknod (char const *name, mode_t mode, dev_t dev) { return mknod (name, mode, dev); }
+    virtual int fsmknod (char const *name, mode_t mode, dev_t rdev) { return mknod (name, mode, rdev); }
     virtual DIR *fsopendir (char const *name) { return opendir (name); }
     virtual struct dirent *fsreaddir (DIR *dir) { return readdir (dir); }
     virtual void fsclosedir (DIR *dir) { closedir (dir); }
@@ -79,8 +83,9 @@ static FullFSAccess fullFSAccess;
 struct NullFSAccess : IFSAccess {
     NullFSAccess ();
 
-    virtual int fsopen (char const *name, int flags, int mode=0) { errno = ENOSYS; return -1; }
+    virtual int fsopen (char const *name, int flags, mode_t mode=0) { errno = ENOSYS; return -1; }
     virtual int fsclose (int fd) { errno = ENOSYS; return -1; }
+    virtual int fsftruncate (int fd, uint64_t len) { errno = ENOSYS; return -1; }
     virtual int fsread (int fd, void *buf, int len) { errno = ENOSYS; return -1; }
     virtual int fspread (int fd, void *buf, int len, uint64_t pos) { errno = ENOSYS; return -1; }
     virtual int fswrite (int fd, void const *buf, int len) { errno = ENOSYS; return -1; }
@@ -88,9 +93,10 @@ struct NullFSAccess : IFSAccess {
     virtual int fsstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
     virtual int fslstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
     virtual int fslutimes (char const *name, struct timespec *times) { errno = ENOSYS; return -1; }
-    virtual int fslchown (char const *name, int uid, int gid) { errno = ENOSYS; return -1; }
+    virtual int fslchown (char const *name, uid_t uid, gid_t gid) { errno = ENOSYS; return -1; }
     virtual int fschmod (char const *name, mode_t mode) { errno = ENOSYS; return -1; }
     virtual int fsunlink (char const *name) { errno = ENOSYS; return -1; }
+    virtual int fsrmdir (char const *name) { errno = ENOSYS; return -1; }
     virtual int fslink (char const *oldname, char const *newname) { errno = ENOSYS; return -1; }
     virtual int fssymlink (char const *oldname, char const *newname) { errno = ENOSYS; return -1; }
     virtual int fsreadlink (char const *name, char *buf, int len) { errno = ENOSYS; return -1; }
@@ -98,7 +104,7 @@ struct NullFSAccess : IFSAccess {
             int (*filter)(const struct dirent *),
             int (*compar)(const struct dirent **, const struct dirent **)) { errno = ENOSYS; return -1; }
     virtual int fsmkdir (char const *dirname, mode_t mode) { errno = ENOSYS; return -1; }
-    virtual int fsmknod (char const *name, mode_t mode, dev_t dev) { errno = ENOSYS; return -1; }
+    virtual int fsmknod (char const *name, mode_t mode, dev_t rdev) { errno = ENOSYS; return -1; }
     virtual DIR *fsopendir (char const *name) { errno = ENOSYS; return NULL; }
     virtual struct dirent *fsreaddir (DIR *dir) { errno = ENOSYS; return NULL; }
     virtual void fsclosedir (DIR *dir) { }
@@ -114,6 +120,7 @@ int main (int argc, char **argv)
 
     if (argc >= 2) {
         if (strcasecmp (argv[1], "backup")  == 0) return cmd_backup  (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "compare") == 0) return cmd_compare (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "diff")    == 0) return cmd_diff    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "list")    == 0) return cmd_list    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1);
@@ -122,6 +129,7 @@ int main (int argc, char **argv)
         fprintf (stderr, "ftbackup: unknown command %s\n", argv[1]);
     }
     fprintf (stderr, "usage: ftbackup backup ...\n");
+    fprintf (stderr, "       ftbackup compare ...\n");
     fprintf (stderr, "       ftbackup diff ...\n");
     fprintf (stderr, "       ftbackup list ...\n");
     fprintf (stderr, "       ftbackup restore ...\n");
@@ -367,6 +375,282 @@ static uint64_t read_nanos_from_file (char const *name)
     structtm.tm_mon  --;
     secs = timegm (&structtm);
     return secs * 1000000000ULL + nanos;
+}
+
+/**
+ * @brief Compare saveset to filesystem.
+ */
+struct FTBComparer : FTBReader {
+    bool opt_verbose;
+    int opt_verbsec;
+    time_t lastverbsec;
+
+    char *maybe_output_listing (char *dstname, Header *hdr);
+};
+
+// when file is written to, compare with actual contents already on disk
+// files should never be read, so return error status if attempt to read
+struct CompFSAccess : IFSAccess {
+    CompFSAccess ();
+
+    virtual int fsopen (char const *name, int flags, mode_t mode=0);
+    virtual int fsclose (int fd) { return close (fd); }
+    virtual int fsftruncate (int fd, uint64_t len);
+    virtual int fsread (int fd, void *buf, int len) { errno = ENOSYS; return -1; }
+    virtual int fspread (int fd, void *buf, int len, uint64_t pos) { errno = ENOSYS; return -1; }
+    virtual int fswrite (int fd, void const *buf, int len);
+    virtual int fsfstat (int fd, struct stat *buf) { return fstat (fd, buf); }
+    virtual int fsstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
+    virtual int fslstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
+    virtual int fslutimes (char const *name, struct timespec *times);
+    virtual int fslchown (char const *name, uid_t uid, gid_t gid);
+    virtual int fschmod (char const *name, mode_t mode);
+    virtual int fsunlink (char const *name);
+    virtual int fsrmdir (char const *name);
+    virtual int fslink (char const *oldname, char const *newname);
+    virtual int fssymlink (char const *oldname, char const *newname);
+    virtual int fsreadlink (char const *name, char *buf, int len) { errno = ENOSYS; return -1; }
+    virtual int fsscandir (char const *dirname, struct dirent ***names, 
+            int (*filter)(const struct dirent *),
+            int (*compar)(const struct dirent **, const struct dirent **)) {
+        errno = ENOSYS; return -1;
+    }
+    virtual int fsmkdir (char const *dirname, mode_t mode);
+    virtual int fsmknod (char const *name, mode_t mode, dev_t rdev);
+    virtual DIR *fsopendir (char const *name) { errno = ENOSYS; return NULL; }
+    virtual struct dirent *fsreaddir (DIR *dir) { errno = ENOSYS; return NULL; }
+    virtual void fsclosedir (DIR *dir) { }
+};
+
+static int cmd_compare (int argc, char **argv)
+{
+    char const *srcprefix;
+    char *p, *ssname;
+    CompFSAccess compFSAccess = CompFSAccess ();
+    FTBComparer ftbcomparer = FTBComparer ();
+    int i;
+
+    srcprefix = NULL;
+    ssname    = NULL;
+    for (i = 0; ++ i < argc;) {
+        if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
+            if (strcasecmp (argv[i], "-decrypt") == 0) {
+                i = decodecipherargs (&ftbcomparer.cripter, argc, argv, i, false);
+                if (i < 0) goto usage;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-incremental") == 0) {
+                ftbcomparer.opt_incrmntl  = true;
+                ftbcomparer.opt_overwrite = true;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-simrderrs") == 0) {
+                if (++ i >= argc) goto usage;
+                ftbcomparer.opt_simrderrs = atoi (argv[i]);
+                continue;
+            }
+            if (strcasecmp (argv[i], "-verbose") == 0) {
+                ftbcomparer.opt_verbose = true;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-verbsec") == 0) {
+                if (++ i >= argc) goto usage;
+                ftbcomparer.opt_verbsec = strtol (argv[i], &p, 0);
+                if ((*p != 0) || (ftbcomparer.opt_verbsec <= 0)) {
+                    fprintf (stderr, "ftbackup: verbsec %s must be integer greater than zero\n", argv[i]);
+                    goto usage;
+                }
+                continue;
+            }
+            fprintf (stderr, "ftbackup: unknown option %s\n", argv[i]);
+            goto usage;
+        }
+        if (ssname == NULL) {
+            ssname = argv[i];
+            continue;
+        }
+        if (srcprefix == NULL) {
+            srcprefix = argv[i];
+            continue;
+        }
+        fprintf (stderr, "ftbackup: unknown argument %s\n", argv[i]);
+        goto usage;
+    }
+    if (srcprefix == NULL) {
+        fprintf (stderr, "ftbackup: missing required arguments\n");
+        goto usage;
+    }
+    ftbcomparer.tfs = &compFSAccess;
+    return ftbcomparer.read_saveset (ssname, srcprefix, srcprefix);
+
+usage:
+    fprintf (stderr, "usage: ftbackup compare [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix>\n");
+    usagecipherargs ("decrypt");
+    fprintf (stderr, "        <srcprefix> = compare only files beginning with this prefix\n");
+    fprintf (stderr, "                      use '' to compare all files\n");
+    return EX_CMD;
+}
+
+char *FTBComparer::maybe_output_listing (char *dstname, Header *hdr)
+{
+    if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
+        lastverbsec = time (NULL);
+        print_header (stderr, hdr, hdr->name);
+    }
+    return dstname;
+}
+
+CompFSAccess::CompFSAccess () { }
+
+// instead of creating the file, we open it for reading so when file is written, we can compare data.
+int CompFSAccess::fsopen (char const *name, int flags, mode_t mode)
+{
+    int fd = open (name, O_RDONLY | O_NOATIME, mode);
+    if (fd < 0) fd = open (name, O_RDONLY, mode);
+    return fd;
+}
+
+// instead of extending file to the given size, make sure it is exactly that size
+// ...as this call is used to pre-extend the file to the exact size as in saveset
+int CompFSAccess::fsftruncate (int fd, uint64_t len)
+{
+    struct stat statbuf;
+    int rc = fstat (fd, &statbuf);
+    if ((rc >= 0) && (len != (uint64_t) statbuf.st_size)) {
+        errno = MYEDATACMP;
+        rc = -1;
+    }
+    return rc;
+}
+
+// instead of writing the data to the file, compare it to the file's existing data
+int CompFSAccess::fswrite (int fd, void const *buf, int len)
+{
+    char cmp[len];
+    int rc = read (fd, cmp, len);
+    if ((rc >= 0) && (memcmp (buf, cmp, rc) != 0)) {
+        errno = MYEDATACMP;
+        rc = -1;
+    }
+    return rc;
+}
+
+// make sure the file's times are as given
+int CompFSAccess::fslutimes (char const *name, struct timespec *times)
+{
+    struct stat statbuf;
+    int rc = lstat (name, &statbuf);
+    if (rc >= 0) {
+        if ((times[0].tv_sec  != statbuf.st_atim.tv_sec)  ||
+            (times[0].tv_nsec != statbuf.st_atim.tv_nsec) ||
+            (times[1].tv_sec  != statbuf.st_mtim.tv_sec)  ||
+            (times[1].tv_nsec != statbuf.st_mtim.tv_nsec)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// make sure the file's ownership is as given
+int CompFSAccess::fslchown (char const *name, uid_t uid, gid_t gid)
+{
+    struct stat statbuf;
+    int rc = lstat (name, &statbuf);
+    if (rc >= 0) {
+        if ((uid != statbuf.st_uid) || (gid != statbuf.st_gid)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// make sure the file's protections and type are as given
+int CompFSAccess::fschmod (char const *name, mode_t mode)
+{
+    struct stat statbuf;
+    int rc = stat (name, &statbuf);
+    if (rc >= 0) {
+        if (mode != statbuf.st_mode) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// instead of deleting the file, make sure the file doesn't exist
+int CompFSAccess::fsunlink (char const *name)
+{
+    struct stat statbuf;
+    int rc = stat (name, &statbuf);
+    if (rc >= 0) {
+        errno = MYEDATACMP;
+        rc = -1;
+    }
+    if ((rc < 0) && (errno == ENOENT)) rc = 0;
+    return rc;
+}
+int CompFSAccess::fsrmdir (char const *name)
+{
+    return fsunlink (name);
+}
+
+// instead of hardlinking to an existing file, make sure the two files are already hardlinked
+int CompFSAccess::fslink (char const *oldname, char const *newname)
+{
+    struct stat oldstatbuf, newstatbuf;
+    int rc = lstat (oldname, &oldstatbuf) | lstat (newname, &newstatbuf);
+    if (rc >= 0) {
+        if ((oldstatbuf.st_dev != newstatbuf.st_dev) ||
+            (oldstatbuf.st_ino != newstatbuf.st_ino)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// instead of writing a symlink, make sure the existing symlink is as given
+int CompFSAccess::fssymlink (char const *oldname, char const *newname)
+{
+    int len = strlen (oldname);
+    char cmp[len+1];
+    int rc = readlink (newname, cmp, len + 1);
+    if (rc >= 0) {
+        if ((rc != len) || (memcmp (cmp, oldname, len) != 0)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// instead of creating a directory, make sure the given directory exists
+int CompFSAccess::fsmkdir (char const *dirname, mode_t mode)
+{
+    struct stat statbuf;
+    int rc = lstat (dirname, &statbuf);
+    if ((rc >= 0) && !S_ISDIR (statbuf.st_mode)) {
+        errno = MYEDATACMP;
+        rc = -1;
+    }
+    return rc;
+}
+
+// instead of making a device special file, make sure the one that exists is the same
+int CompFSAccess::fsmknod (char const *name, mode_t mode, dev_t rdev)
+{
+    struct stat statbuf;
+    int rc = lstat (name, &statbuf);
+    if (rc >= 0) {
+        if ((statbuf.st_mode != mode) || (statbuf.st_rdev != rdev)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
 }
 
 /**
@@ -644,7 +928,7 @@ static int cmd_list (int argc, char **argv)
         goto usage;
     }
     ftblister.tfs = &nullFSAccess;
-    return ftblister.read_saveset (ssname, "", "");
+    return ftblister.read_saveset (ssname, "", "$$ make sure nothing gets written to disk $$");
 
 usage:
     fprintf (stderr, "usage: ftbackup list [-decrypt ... ] [-simrderrs <mod>] <saveset>\n");
@@ -796,7 +1080,7 @@ static int cmd_xorvfy (int argc, char **argv)
 
     fd = open (name, O_RDONLY);
     if (fd < 0) {
-        fprintf (stderr, "open(%s) error: %s\n", name, strerror (errno));
+        fprintf (stderr, "open(%s) error: %s\n", name, mystrerr (errno));
         return EX_SSIO;
     }
 
@@ -804,7 +1088,7 @@ static int cmd_xorvfy (int argc, char **argv)
     rc = read (fd, block, MINBLOCKSIZE);
     if (rc != MINBLOCKSIZE) {
         if (rc < 0) {
-            fprintf (stderr, "read(%s) error: %s\n", name, strerror (errno));
+            fprintf (stderr, "read(%s) error: %s\n", name, mystrerr (errno));
         } else {
             fprintf (stderr, "read(%s) file too short\n", name);
         }
@@ -880,7 +1164,7 @@ static int cmd_xorvfy (int argc, char **argv)
     }
 
     if (rc < 0) {
-        fprintf (stderr, "%llu: pread() error: %s\n", rdpos, strerror (errno));
+        fprintf (stderr, "%llu: pread() error: %s\n", rdpos, mystrerr (errno));
         goto done;
     }
     if (rc != 0) {
@@ -1111,11 +1395,11 @@ static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **a
     } else if (keyline[0] == '@') {
         keyfile = fopen (++ keyline, "r");
         if (keyfile == NULL) {
-            fprintf (stderr, "ftbackup: open(%s) error: %s\n", keyline, strerror (errno));
+            fprintf (stderr, "ftbackup: open(%s) error: %s\n", keyline, mystrerr (errno));
             return -1;
         }
         if (fgets (keybuff, sizeof keybuff, keyfile) == NULL) {
-            fprintf (stderr, "ftbackup: read(%s) error: %s\n", keyline, strerror (errno));
+            fprintf (stderr, "ftbackup: read(%s) error: %s\n", keyline, mystrerr (errno));
             fclose (keyfile);
             return -1;
         }
@@ -1259,12 +1543,12 @@ static bool readpasswd (char *pwbuff, size_t pwsize)
 
     ttyfd = open ("/dev/tty", O_RDWR | O_NOCTTY);
     if (ttyfd < 0) {
-        fprintf (stderr, "open(/dev/tty) error: %s\n", strerror (errno));
+        fprintf (stderr, "open(/dev/tty) error: %s\n", mystrerr (errno));
         return false;
     }
 
     if (tcgetattr (ttyfd, &oflags) < 0) {
-        fprintf (stderr, "tcgetattr(/dev/tty) error: %s\n", strerror (errno));
+        fprintf (stderr, "tcgetattr(/dev/tty) error: %s\n", mystrerr (errno));
         goto err2;
     }
 
@@ -1273,7 +1557,7 @@ static bool readpasswd (char *pwbuff, size_t pwsize)
     nflags.c_lflag |= ECHONL;
 
     if (tcsetattr (ttyfd, TCSANOW, &nflags) < 0) {
-        fprintf (stderr, "tcsetattr(/dev/tty) error: %s\n", strerror (errno));
+        fprintf (stderr, "tcsetattr(/dev/tty) error: %s\n", mystrerr (errno));
         goto err2;
     }
 
@@ -1281,13 +1565,13 @@ static bool readpasswd (char *pwbuff, size_t pwsize)
         rc = write (ttyfd, "password: ", 10);
         if (rc < 10) {
             if (rc >= 0) errno = EPIPE;
-            fprintf (stderr, "write(/dev/tty) error: %s\n", strerror (errno));
+            fprintf (stderr, "write(/dev/tty) error: %s\n", mystrerr (errno));
             goto err1;
         }
         rc = read (ttyfd, pwbuff, pwsize);
         if (rc <= 0) {
             if (rc == 0) errno = EPIPE;
-            fprintf (stderr, "read(/dev/tty) error: %s\n", strerror (errno));
+            fprintf (stderr, "read(/dev/tty) error: %s\n", mystrerr (errno));
             goto err1;
         }
     } while ((rc == 1) || (pwbuff[rc-1] != '\n'));
@@ -1295,7 +1579,7 @@ static bool readpasswd (char *pwbuff, size_t pwsize)
     pwbuff[--rc] = 0;
 
     if (tcsetattr (ttyfd, TCSANOW, &oflags) < 0) {
-        fprintf (stderr, "tcsetattr(/dev/tty) error: %s\n", strerror (errno));
+        fprintf (stderr, "tcsetattr(/dev/tty) error: %s\n", mystrerr (errno));
         goto err2;
     }
 
@@ -1307,4 +1591,11 @@ err1:
 err2:
     close (ttyfd);
     return false;
+}
+
+char const *mystrerr (int err)
+{
+    if (err == MYEDATACMP) return "data compare mismatch";
+    if (err == MYESIMRDER) return "simulated read error";
+    return strerror (err);
 }

@@ -129,7 +129,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
         }
         ssfd = open (ssname, O_WRONLY | O_CREAT | O_TRUNC | ooptions, 0666);
         if (ssfd < 0) {
-            fprintf (stderr, "ftbackup: creat(%s) saveset error: %s\n", ssname, strerror (errno));
+            fprintf (stderr, "ftbackup: creat(%s) saveset error: %s\n", ssname, mystrerr (errno));
             return EX_SSIO;
         }
         if (isatty (ssfd)) {
@@ -184,7 +184,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
      */
     if ((strcmp (ssname, "-") != 0) && (close (ssfd) < 0)) {
         ssfd = -1;
-        fprintf (stderr, "ftbackup: close() saveset error: %s\n", strerror (errno));
+        fprintf (stderr, "ftbackup: close() saveset error: %s\n", mystrerr (errno));
         return EX_SSIO;
     }
     ssfd = -1;
@@ -208,7 +208,7 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
      * See what type of thing we are dealing with.
      */
     if (tfs->fslstat (path, &statbuf) < 0) {
-        fprintf (stderr, "ftbackup: lstat(%s) error: %s\n", path, strerror (errno));
+        fprintf (stderr, "ftbackup: lstat(%s) error: %s\n", path, mystrerr (errno));
         return false;
     }
 
@@ -299,7 +299,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     fd = tfs->fsopen (hdr->name, O_RDONLY | O_NOATIME | ioptions);
     if (fd < 0) fd = tfs->fsopen (hdr->name, O_RDONLY | ioptions);
     if (fd < 0) {
-        fprintf (stderr, "ftbackup: open(%s) error: %s\n", hdr->name, strerror (errno));
+        fprintf (stderr, "ftbackup: open(%s) error: %s\n", hdr->name, mystrerr (errno));
         return true;
     }
 
@@ -323,7 +323,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
         if (ok) {
             rc = tfs->fsread (fd, buf, len);
             if (rc <= 0) {
-                fprintf (stderr, "ftbackup: read(%s@0x%llX) error: %s\n", hdr->name, ofs, ((rc == 0) ? "end of file" : strerror (errno)));
+                fprintf (stderr, "ftbackup: read(%s@0x%llX) error: %s\n", hdr->name, ofs, ((rc == 0) ? "end of file" : mystrerr (errno)));
                 ok = false;
             }
         }
@@ -364,7 +364,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
      * If different mtime than when started, output warning message.
      */
     if (tfs->fsfstat (fd, &statend) < 0) {
-        fprintf (stderr, "ftbackup: fstat(%s) at end of backup error: %s\n", hdr->name, strerror (errno));
+        fprintf (stderr, "ftbackup: fstat(%s) at end of backup error: %s\n", hdr->name, mystrerr (errno));
     } else if (NANOTIME (statend.st_mtim) > NANOTIME (statbuf->st_mtim)) {
         fprintf (stderr, "ftbackup: file %s modified during processing\n", hdr->name);
     }
@@ -393,7 +393,7 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
      */
     nents = tfs->fsscandir (hdr->name, &names, NULL, alphasort);
     if (nents < 0) {
-        fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", hdr->name, strerror (errno));
+        fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", hdr->name, mystrerr (errno));
         return false;
     }
 
@@ -521,7 +521,7 @@ bool FTBWriter::write_symlink (Header *hdr)
         if (buf == NULL) NOMEM ();
         rc = tfs->fsreadlink (hdr->name, buf, hdr->size + 1);
         if (rc < 0) {
-            fprintf (stderr, "ftbackup: readlink(%s) error: %s\n", hdr->name, strerror (errno));
+            fprintf (stderr, "ftbackup: readlink(%s) error: %s\n", hdr->name, mystrerr (errno));
             return false;
         }
         if ((uint32_t) rc <= hdr->size) break;
@@ -926,7 +926,7 @@ void *FTBWriter::encr_thread ()
 
     noncefile = fopen ("/dev/urandom", "r");
     if (noncefile == NULL) {
-        fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", strerror (errno));
+        fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", mystrerr (errno));
         abort ();
     }
 
@@ -944,7 +944,7 @@ void *FTBWriter::encr_thread ()
          * Fill in the nonce with a random number to salt the encryption.
          */
         if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
-            fprintf (stderr, "read(/dev/urandom) error: %s\n", strerror (errno));
+            fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
             abort ();
         }
 
@@ -1022,13 +1022,13 @@ void FTBWriter::write_ssblock (Block *block)
 
     if ((opt_segsize > 0) && (byteswrittentoseg >= opt_segsize)) {
         if (close (ssfd) < 0) {
-            fprintf (stderr, "ftbackup: close(%s) saveset error: %s\n", sssegname, strerror (errno));
+            fprintf (stderr, "ftbackup: close(%s) saveset error: %s\n", sssegname, mystrerr (errno));
             exit (EX_SSIO);
         }
         sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
         ssfd = open (sssegname, O_WRONLY | O_CREAT | O_TRUNC | ooptions, 0666);
         if (ssfd < 0) {
-            fprintf (stderr, "ftbackup: creat(%s) saveset error: %s\n", sssegname, strerror (errno));
+            fprintf (stderr, "ftbackup: creat(%s) saveset error: %s\n", sssegname, mystrerr (errno));
             exit (EX_SSIO);
         }
         byteswrittentoseg = 0;
@@ -1038,7 +1038,7 @@ void FTBWriter::write_ssblock (Block *block)
     for (ofs = 0; ofs < bs; ofs += rc) {
         rc = write (ssfd, ((uint8_t *)block) + ofs, bs - ofs);
         if (rc <= 0) {
-            fprintf (stderr, "ftbackup: write() saveset error: %s\n", (rc == 0) ? "end of file" : strerror (errno));
+            fprintf (stderr, "ftbackup: write() saveset error: %s\n", (rc == 0) ? "end of file" : mystrerr (errno));
             exit (EX_SSIO);
         }
     }

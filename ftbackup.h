@@ -2,6 +2,7 @@
 #ifndef _FTBACKUP_H
 #define _FTBACKUP_H
 
+#define _FILE_OFFSET_BITS 64
 #define __USE_GNU // fcntl.h: O_DIRECT, O_NOATIME
 #include <dirent.h>
 #include <errno.h>
@@ -40,7 +41,7 @@
 #define INTERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error %d\n", err); abort (); } while (0)
 #define NANOTIME(tv) ((tv).tv_sec * 1000000000ULL + (tv).tv_nsec)
 #define NOMEM() do { fprintf (stderr, "ftbackup: out of memory\n"); abort (); } while (0)
-#define SYSERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error: %s\n", strerror (err)); abort (); } while (0)
+#define SYSERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error: %s\n", mystrerr (err)); abort (); } while (0)
 #define SYSERRNO(name) SYSERR(name,errno)
 
 typedef unsigned int uint32_t;
@@ -94,5 +95,39 @@ struct FTBackup {
     static void xorblockdata (void *dst, void const *src, uint32_t nby);
     static uint32_t checksumdata (void const *src, uint32_t nby);
 };
+
+struct IFSAccess {
+    virtual ~IFSAccess ();
+
+    virtual int fsopen (char const *name, int flags, mode_t mode=0) =0;
+    virtual int fsclose (int fd) =0;
+    virtual int fsftruncate (int fd, uint64_t len) =0;
+    virtual int fsread (int fd, void *buf, int len) =0;
+    virtual int fspread (int fd, void *buf, int len, uint64_t pos) =0;
+    virtual int fswrite (int fd, void const *buf, int len) =0;
+    virtual int fsfstat (int fd, struct stat *buf) =0;
+    virtual int fsstat (char const *name, struct stat *buf) =0;
+    virtual int fslstat (char const *name, struct stat *buf) =0;
+    virtual int fslutimes (char const *name, struct timespec *times) =0;
+    virtual int fslchown (char const *name, uid_t uid, gid_t gid) =0;
+    virtual int fschmod (char const *name, mode_t mode) =0;
+    virtual int fsunlink (char const *name) =0;
+    virtual int fsrmdir (char const *name) =0;
+    virtual int fslink (char const *oldname, char const *newname) =0;
+    virtual int fssymlink (char const *oldname, char const *newname) =0;
+    virtual int fsreadlink (char const *name, char *buf, int len) =0;
+    virtual int fsscandir (char const *dirname, struct dirent ***names, 
+            int (*filter)(const struct dirent *),
+            int (*compar)(const struct dirent **, const struct dirent **)) =0;
+    virtual int fsmkdir (char const *dirname, mode_t mode) =0;
+    virtual int fsmknod (char const *name, mode_t mode, dev_t rdev) =0;
+    virtual DIR *fsopendir (char const *name) =0;
+    virtual struct dirent *fsreaddir (DIR *dir) =0;
+    virtual void fsclosedir (DIR *dir) =0;
+};
+
+#define MYEDATACMP 632396223
+#define MYESIMRDER 632396224
+char const *mystrerr (int err);
 
 #endif

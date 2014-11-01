@@ -26,8 +26,8 @@ static bool rmdirentry  (IFSAccess *ifsa, char const *dirname, char const *entna
 
 FTBReader::FTBReader ()
 {
-    opt_incrmntl  = 0;
-    opt_overwrite = 0;
+    opt_incrmntl  = false;
+    opt_overwrite = false;
     opt_simrderrs = 0;
 
     xorblocks     = NULL;
@@ -151,7 +151,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
             // we must be able to open that specific file as given by the user
             ssfd = open (ssname, O_RDONLY);
             if (ssfd < 0) {
-                fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, strerror (errno));
+                fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, mystrerr (errno));
                 return EX_SSIO;
             }
         } else {
@@ -163,14 +163,14 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
 
                 // if something like permissions error, print error and die
                 if (errno != ENOENT) {
-                    fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, strerror (errno));
+                    fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, mystrerr (errno));
                     return EX_SSIO;
                 }
 
                 // the given name is not found, try opening <givenname>.<lowest-segno>
                 thissegno  = findnextsegno (ssname, 0);
                 if (thissegno == 0) {
-                    fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, strerror (ENOENT));
+                    fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, mystrerr (ENOENT));
                     return EX_SSIO;
                 }
                 ssbasename = ssname;
@@ -178,7 +178,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                 sprintf (sssegname, "%s.%.*u", ssname, SEGNODECDIGS, thissegno);
                 ssfd = open (sssegname, O_RDONLY);
                 if (ssfd < 0) {
-                    fprintf (stderr, "ftbackup: open(%s) error: %s\n", sssegname, strerror (errno));
+                    fprintf (stderr, "ftbackup: open(%s) error: %s\n", sssegname, mystrerr (errno));
                     return EX_SSIO;
                 }
             }
@@ -380,7 +380,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
             }
             if (opt_overwrite) tfs->fsunlink (dstname);
             if (tfs->fslink (inodesname[oldfileno], dstname) < 0) {
-                fprintf (stderr, "ftbackup: link(%s, %s) error: %s\n", inodesname[oldfileno], dstname, strerror (errno));
+                fprintf (stderr, "ftbackup: link(%s, %s) error: %s\n", inodesname[oldfileno], dstname, mystrerr (errno));
                 return false;
             }
         }
@@ -397,12 +397,21 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
         if (opt_overwrite) tfs->fsunlink (dstname);
         fd = tfs->fsopen (dstname, O_WRONLY | O_CREAT | O_EXCL, hdr->stmode);
         if (fd < 0) {
-            fprintf (stderr, "ftbackup: creat(%s) error: %s\n", dstname, strerror (errno));
+            fprintf (stderr, "ftbackup: creat(%s) error: %s\n", dstname, mystrerr (errno));
+        } else if (tfs->fsftruncate (fd, hdr->size) < 0) {
+            fprintf (stderr, "ftbackup: ftruncate(%s, %llu) error: %s\n", dstname, hdr->size, mystrerr (errno));
+            tfs->fsclose (fd);
+            fd = -1;
         } else if (tfs->fsfstat (fd, &statbuf) < 0) {
-            fprintf (stderr, "ftbackup: fstat(%s) error: %s\n", dstname, strerror (errno));
+            fprintf (stderr, "ftbackup: fstat(%s) error: %s\n", dstname, mystrerr (errno));
             tfs->fsclose (fd);
             fd = -1;
         } else {
+
+            /*
+             * Enter in list of restored regular files in case there is
+             * a leter reference to the file via hardlinked file number.
+             */
             if (inodessize <= hdr->fileno) {
                 do inodessize += inodessize / 2 + 10;
                 while (inodessize <= hdr->fileno);
@@ -429,7 +438,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
                 for (wofs = 0; wofs < len; wofs += rc) {
                     rc = tfs->fswrite (fd, buf + wofs, len - wofs);
                     if (rc <= 0) {
-                        fprintf (stderr, "ftbackup: write(%s) error: %s\n", dstname, ((rc == 0) ? "end of file" : strerror (errno)));
+                        fprintf (stderr, "ftbackup: write(%s) error: %s\n", dstname, ((rc == 0) ? "end of file" : mystrerr (errno)));
                         tfs->fsclose (fd);
                         fd = -1;
                         break;
@@ -455,7 +464,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
      * Done writing, close file.
      */
     if ((fd >= 0) && (tfs->fsclose (fd) < 0)) {
-        fprintf (stderr, "ftbackup: close(%s) error %s\n", dstname, strerror (errno));
+        fprintf (stderr, "ftbackup: close(%s) error %s\n", dstname, mystrerr (errno));
         fd = -1;
     }
 
@@ -487,7 +496,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
     if (dstname != NULL) {
         *setimes = tfs->fsmkdir (dstname, hdr->stmode) >= 0;
         if (!*setimes && (errno != EEXIST)) {
-            fprintf (stderr, "ftbackup: mkdir(%s) error: %s\n", dstname, strerror (errno));
+            fprintf (stderr, "ftbackup: mkdir(%s) error: %s\n", dstname, mystrerr (errno));
             ok = false;
         }
     }
@@ -504,7 +513,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
     if (opt_incrmntl && (dstname != NULL)) {
         nents = tfs->fsscandir (dstname, &names, NULL, alphasort);
         if (nents < 0) {
-            fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dstname, strerror (errno));
+            fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dstname, mystrerr (errno));
             names = NULL;
             nents = 0;
             ok    = false;
@@ -667,7 +676,7 @@ bool FTBReader::read_symlink (Header *hdr, char const *dstname)
     if (dstname != NULL) {
         if (opt_overwrite) tfs->fsunlink (dstname);
         if (tfs->fssymlink (link, dstname) < 0) {
-            fprintf (stderr, "ftbackup: symlink(%s) error: %s\n", dstname, strerror (errno));
+            fprintf (stderr, "ftbackup: symlink(%s) error: %s\n", dstname, mystrerr (errno));
             return false;
         }
     }
@@ -690,7 +699,7 @@ bool FTBReader::read_special (Header *hdr, char const *dstname)
     if (dstname != NULL) {
         if (opt_overwrite) tfs->fsunlink (dstname);
         if (tfs->fsmknod (dstname, hdr->stmode, rdev) < 0) {
-            fprintf (stderr, "ftbackup: mknod(%s) error: %s\n", dstname, strerror (errno));
+            fprintf (stderr, "ftbackup: mknod(%s) error: %s\n", dstname, mystrerr (errno));
             return false;
         }
     }
@@ -901,7 +910,7 @@ void FTBReader::read_first_block ()
             readoffset += MINBLOCKSIZE;
             if (rc == MINBLOCKSIZE) break;
             fprintf (stderr, "ftbackup: pread(%llu) saveset error: %s\n", miniOffset,
-                    ((rc > 0) ? "partial read" : (rc == 0) ? "end of file" : strerror (errno)));
+                    ((rc > 0) ? "partial read" : (rc == 0) ? "end of file" : mystrerr (errno)));
             if (rc == 0) {
                 fprintf (stderr, "ftbackup: unable to locate a backup header\n");
                 throw new EndOfSSFile ();
@@ -1024,7 +1033,7 @@ noxoread:
         // if read error, output message and read again.
         // if the lastseqno block is lost, it will be detected on next read.
         if (rc < 0) {
-            fprintf (stderr, "ftbackup: pread(%llu) saveset error: %s\n", lastreadoffs, strerror (errno));
+            fprintf (stderr, "ftbackup: pread(%llu) saveset error: %s\n", lastreadoffs, mystrerr (errno));
             goto noxoread;
         }
 
@@ -1093,7 +1102,7 @@ noxoread:
          */
         if ((rc < 0) || ((uint32_t) rc != bs)) {
             fprintf (stderr, "ftbackup: pread(%llu) saveset error: %s\n", lastreadoffs,
-                    ((rc > 0) ? "partial read" : (rc == 0) ? "end of file" : strerror (errno)));
+                    ((rc > 0) ? "partial read" : (rc == 0) ? "end of file" : mystrerr (errno)));
 
             /*
              * If IO error, try to read more.
@@ -1270,7 +1279,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         if (wprfile == NULL) {
             wprfile = fopen ("/tmp/simrderrs.dat", "a+");
             if (wprfile == NULL) {
-                fprintf (stderr, "wrapped_pread*: error creating /tmp/simrderrs.dat: %s\n", strerror (errno));
+                fprintf (stderr, "wrapped_pread*: error creating /tmp/simrderrs.dat: %s\n", mystrerr (errno));
                 abort ();
             }
             setlinebuf (wprfile);
@@ -1295,7 +1304,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         }
 
         if ((nowtv.tv_usec % opt_simrderrs) == 0) {
-            errno = EROFS;
+            errno = MYESIMRDER;
             return -1;
         }
     }
@@ -1328,7 +1337,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, thissegno);
         ssfd = open (sssegname, O_RDONLY);
         if (ssfd < 0) {
-            fprintf (stderr, "ftbackup: open(%s) error: %s\n", sssegname, strerror (errno));
+            fprintf (stderr, "ftbackup: open(%s) error: %s\n", sssegname, mystrerr (errno));
             exit (EX_SSIO);
         }
 
@@ -1440,7 +1449,7 @@ static uint32_t findnextsegno (char const *basename, uint32_t lastsegno)
      */
     nents = scandir (dirname, &names, NULL, alphasort);
     if (nents < 0) {
-        fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dirname, strerror (errno));
+        fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dirname, mystrerr (errno));
         exit (EX_SSIO);
     }
 
@@ -1544,5 +1553,5 @@ static bool rmdirentry (IFSAccess *ifsa, char const *dirname, char const *entnam
         }
     } while (ndel);
 
-    return rmdir (name) >= 0;
+    return ifsa->fsrmdir (name) >= 0;
 }
