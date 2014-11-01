@@ -398,6 +398,22 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     }
 
     /*
+     * If directory contains ~SKIPDIR.FTB pretend that is the only file it contains.
+     */
+    for (i = 0; i < nents; i ++) {
+        de = names[i];
+        if (strcmp (de->d_name, "~SKIPDIR.FTB") == 0) {
+            fprintf (stderr, "ftbackup: skipping directory %s for containing ~SKIPDIR.FTB\n", hdr->name);
+            for (i = 0; i < nents; i ++) {
+                if (names[i] != de) free (names[i]);
+            }
+            nents = 1;
+            names[0] = de;
+            break;
+        }
+    }
+
+    /*
      * Get length of the longest name including null terminator.
      */
     longest = 0;
