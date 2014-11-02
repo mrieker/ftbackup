@@ -372,7 +372,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     /*
      * All done, good or bad.
      */
-    close (fd);
+    tfs->fsclose (fd);
 
     return ok;
 }
@@ -387,6 +387,7 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     char const *name;
     int i, j, len, longest, nents, pathlen;
     struct dirent *de, **names;
+    struct stat statend;
 
     /*
      * Read and sort the directory contents.
@@ -500,6 +501,15 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
         free (de);
     }
     free (names);
+
+    /*
+     * If different mtime than when started, output warning message.
+     */
+    if (tfs->fsstat (hdr->name, &statend) < 0) {
+        fprintf (stderr, "ftbackup: stat(%s) at end of backup error: %s\n", hdr->name, mystrerr (errno));
+    } else if (NANOTIME (statend.st_mtim) > NANOTIME (statbuf->st_mtim)) {
+        fprintf (stderr, "ftbackup: directory %s modified during processing\n", hdr->name);
+    }
 
     return ok;
 }
