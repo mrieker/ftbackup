@@ -411,7 +411,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     bool ok, reloaded;
     int fd, rc;
     struct stat statend;
-    uint32_t bs, i;
+    uint32_t bs, i, plen;
     uint64_t len, ofs;
     uint8_t *buf;
 
@@ -447,6 +447,8 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     /*
      * Maybe we are restoring stack from a checkpoint.
      */
+    ofs      = 0;
+    ok       = true;
     reloaded = false;
     if (cpin) {
 
@@ -480,8 +482,6 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
      */
     if (!reloaded) {
         write_header (hdr);
-        ofs = 0;
-        ok  = true;
     }
 
     /*
@@ -491,12 +491,13 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     bs = 1 << l2bs;
     for (; ofs < hdr->size; ofs += rc) {
         if (cpout) goto cpoutreq;
-        len = hdr->size - ofs;
-        if (len > FILEIOSIZE) len = FILEIOSIZE;
-        rc  = posix_memalign ((void **)&buf, PAGESIZE, (len + PAGESIZE - 1) & -PAGESIZE);
+        len  = hdr->size - ofs;                                 // number of bytes to end-of-file
+        if (len > FILEIOSIZE) len = FILEIOSIZE;                 // never more than this at a time
+        plen = (len + PAGESIZE - 1) & -PAGESIZE;                // page-aligned length for O_DIRECT
+        rc   = posix_memalign ((void **)&buf, PAGESIZE, plen);  // page-aligned buffer for O_DIRECT
         if (rc != 0) NOMEM ();
         if (ok) {
-            rc = tfs->fspread (fd, buf, len, ofs);
+            rc = tfs->fspread (fd, buf, plen, ofs);
             if (rc < 0) {
                 fprintf (stderr, "ftbackup: pread(%s, ..., %llu, %llu) error: %s\n",
                         hdr->name, len, ofs, mystrerr (errno));
@@ -508,6 +509,8 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
                         hdr->name, len, ofs, rc, ((rc == 1) ? "" : "s"));
                 ok = false;
                 memset (buf + rc, 0x69, len - rc);
+            } else {
+                rc = len;  // might be more if plen > len and file has been extended since hdr->size was set
             }
         } else {
             memset (buf, 0x69, len);

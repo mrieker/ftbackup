@@ -6,7 +6,7 @@ COMMITCLEAN := $(strip $(shell git status | grep -q modified: ; echo $$?))
 VERFILE = $(COMMITHASH)_$(COMMITCLEAN).ver
 
 ftbackup: ftbackup.cpp ftbackup.h ftbreader.h ftbreader.cpp ftbwriter.h ftbwriter.cpp json.h json.cpp $(VERFILE) cryptopp562/libcryptopp.a
-	cc -Wall -Werror -g -o ftbackup \
+	cc -Wall -Werror -O2 -g -o ftbackup \
 		-DGITCOMMITHASH='"$(COMMITHASH)"' \
 		-DGITCOMMITDATE='"$(COMMITDATE)"' \
 		-DGITCOMMITCLEAN=$(COMMITCLEAN)   \
