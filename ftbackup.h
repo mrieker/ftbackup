@@ -36,6 +36,9 @@
 #define BLOCK_MAGIC  "ftbackup"
 #define HEADER_MAGIC "ftbheder"
 
+#define DEBZPREFIX "ZBEG"
+#define DEBZSUFFIX "ZEND"
+
 #define HFL_HDLINK 0x01  // regular file is an hardlink
 
 #define INTERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error %d\n", err); abort (); } while (0)

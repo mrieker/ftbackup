@@ -713,6 +713,23 @@ bool FTBReader::read_special (Header *hdr, char const *dstname)
  * @param zip = true: data in saveset is compressed, unzip it
  *             false: data in saveset is uncompressed, copy it
  */
+#define VERIFYZMARKER(zmarker) \
+    for (uint32_t i = 0; i < strlen (zmarker); i ++) {  \
+        if (zstrm.avail_in == 0) {                      \
+            read_block (false);                         \
+        }                                               \
+        if (i == 0) {                                   \
+            fprintf (stderr, "read_raw*: %s %6u %5u\n", zmarker, lastseqno, (1 << l2bs) - zstrm.avail_in); \
+        }                                               \
+        -- zstrm.avail_in;                              \
+        if (*(zstrm.next_in ++) != zmarker[i]) {        \
+            asm volatile ("int3 ; nop");                \
+        }                                               \
+    }                                                   \
+    if (zstrm.avail_in == 0) {                          \
+        read_block (false);                             \
+    }
+
 void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
 {
     int rc;
@@ -737,6 +754,7 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
              * It is zipped, make sure our unzipper is open.
              */
             if (!zisopen) {
+                VERIFYZMARKER (DEBZPREFIX);
                 uint32_t ai = zstrm.avail_in;
                 uint32_t ao = zstrm.avail_out;
                 Bytef   *ni = zstrm.next_in;
@@ -789,6 +807,7 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
                     zstrm.next_out  = NULL;
                     rc = inflateEnd (&zstrm);
                     if (rc != Z_OK) INTERR (inflateEnd, rc);
+                    VERIFYZMARKER (DEBZSUFFIX);
                     zisopen = false;
                 }
 

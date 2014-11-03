@@ -641,6 +641,17 @@ void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
     }                                                                   \
 } while (false)
 
+#define OUTPUTZMARKER(zmarker) \
+    for (uint32_t i = 0; i < strlen (zmarker); i ++) {  \
+        CHECKROOM;                                      \
+        if (i == 0) {                                   \
+            fprintf (stderr, "compr_thread*: %s %6u %5u\n", zmarker, lastseqno + 1, bs - zstrm.avail_out); \
+        }                                               \
+        *(zstrm.next_out ++) = zmarker[i];              \
+        -- zstrm.avail_out;                             \
+        CHECKFULL;                                      \
+    }
+
 void *FTBWriter::compr_thread_wrapper (void *ftbw)
 {
     return ((FTBWriter *) ftbw)->compr_thread ();
@@ -676,6 +687,7 @@ void *FTBWriter::compr_thread ()
          */
         if (dty > 0) {
             if (!zisopen) {
+                OUTPUTZMARKER (DEBZPREFIX);
                 void    *no = zstrm.next_out;
                 uint32_t ao = zstrm.avail_out;
                 memset (&zstrm, 0, sizeof zstrm);
@@ -708,6 +720,7 @@ void *FTBWriter::compr_thread ()
                 if (rc != Z_STREAM_END) INTERR (deflate, rc);
                 rc = deflateEnd (&zstrm);
                 if (rc != Z_OK) INTERR (deflateEnd, rc);
+                OUTPUTZMARKER (DEBZSUFFIX);
                 zisopen = false;
             }
 
