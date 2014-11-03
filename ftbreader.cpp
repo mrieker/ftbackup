@@ -758,6 +758,7 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
             if ((rc != Z_OK) && (rc != Z_NEED_DICT) && ((rc != Z_STREAM_END) || (zstrm.avail_out != 0))) {
                 fprintf (stderr, "ftbackup: inflate() error %d\n", rc);
                 inflateEnd (&zstrm);
+                zisopen = false;
                 zstrm.avail_in = 0;
                 throw new LostSSBlock (0);
             }

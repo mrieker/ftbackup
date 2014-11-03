@@ -49,7 +49,6 @@ private:
     bool zisopen;
     char const *ssbasename;
     char *sssegname;
-    char **inodesname;
     dev_t inodesdevno;
     ino_t *inodeslist;
     int ssfd;
@@ -61,6 +60,7 @@ private:
     uint32_t lastxorno;
     uint32_t thissegno;
     uint64_t byteswrittentoseg;
+    uint64_t *inodesmtim;
     z_stream zstrm;
 
     SlotQueue<ComprSlot> comprqueue;  // variable length data to be compressed and blocked

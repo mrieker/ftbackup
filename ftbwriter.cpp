@@ -23,10 +23,9 @@ FTBWriter::FTBWriter ()
 
     freeblocks  = NULL;
     xorblocks   = NULL;
-    zisopen     = 0;
+    zisopen     = false;
     ssbasename  = NULL;
     sssegname   = NULL;
-    inodesname  = NULL;
     inodesdevno = 0;
     inodeslist  = NULL;
     ssfd        = -1;
@@ -38,6 +37,7 @@ FTBWriter::FTBWriter ()
     lastxorno   = 0;
     thissegno   = 0;
     byteswrittentoseg = 0;
+    inodesmtim  = NULL;
     memset (&zstrm, 0, sizeof zstrm);
 
     comprqueue = SlotQueue<ComprSlot> ();
@@ -63,19 +63,16 @@ FTBWriter::~FTBWriter ()
         free (xorblocks);
     }
 
-    if (inodesname != NULL) {
-        for (i = 0; i < inodesused; i ++) {
-            free (inodesname[i]);
-        }
-        free (inodesname);
-    }
-
     if (inodeslist != NULL) {
         free (inodeslist);
     }
 
     if (ssfd >= 0) {
         close (ssfd);
+    }
+
+    if (inodesmtim != NULL) {
+        free (inodesmtim);
     }
 
     if (zisopen) {
@@ -123,7 +120,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     } else {
         if (opt_segsize > 0) {
             ssbasename = ssname;
-            sssegname  = (char *) alloca (strlen (ssbasename) + 10);
+            sssegname  = (char *) alloca (strlen (ssbasename) + SEGNODECDIGS + 4);
             ssname     = sssegname;
             sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
         }
@@ -285,7 +282,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     for (i = 0; i < inodesused; i ++) {
         if (inodeslist[i] == statbuf->st_ino) break;
     }
-    if ((i < inodesused) && (stat (inodesname[i], &statend) >= 0) && (NANOTIME (statend.st_mtim) == NANOTIME (statbuf->st_mtim))) {
+    if ((i < inodesused) && (inodesmtim[i] == hdr->mtimns)) {
         uint32_t fileno = i;
         hdr->flags = HFL_HDLINK;
         write_header (hdr);
@@ -300,7 +297,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     if (fd < 0) fd = tfs->fsopen (hdr->name, O_RDONLY | ioptions);
     if (fd < 0) {
         fprintf (stderr, "ftbackup: open(%s) error: %s\n", hdr->name, mystrerr (errno));
-        return true;
+        return false;
     }
 
     /*
@@ -343,8 +340,8 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
         do inodessize += inodessize / 2 + 10;
         while (inodessize <= i);
         inodeslist = (ino_t *) realloc (inodeslist, inodessize * sizeof *inodeslist);
-        inodesname = (char **) realloc (inodesname, inodessize * sizeof *inodesname);
-        if ((inodeslist == NULL) || (inodesname == NULL)) NOMEM ();
+        inodesmtim = (uint64_t *) realloc (inodesmtim, inodessize * sizeof *inodesmtim);
+        if ((inodeslist == NULL) || (inodesmtim == NULL)) NOMEM ();
     }
     if (inodesdevno != statbuf->st_dev) {
         fprintf (stderr, "ftbackup: %s different dev_t %lu than %lu\n", hdr->name, statbuf->st_dev, inodesdevno);
@@ -352,12 +349,11 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     } else {
         while (inodesused <= i) {
             inodeslist[inodesused] = 0;
-            inodesname[inodesused] = NULL;
+            inodesmtim[inodesused] = 0;
             inodesused ++;
         }
         inodeslist[i] = statbuf->st_ino;
-        inodesname[i] = strdup (hdr->name);
-        if (inodesname[i] == NULL) NOMEM ();
+        inodesmtim[i] = hdr->mtimns;
     }
 
     /*
@@ -365,7 +361,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
      */
     if (tfs->fsfstat (fd, &statend) < 0) {
         fprintf (stderr, "ftbackup: fstat(%s) at end of backup error: %s\n", hdr->name, mystrerr (errno));
-    } else if (NANOTIME (statend.st_mtim) > NANOTIME (statbuf->st_mtim)) {
+    } else if (NANOTIME (statend.st_mtim) > hdr->mtimns) {
         fprintf (stderr, "ftbackup: file %s modified during processing\n", hdr->name);
     }
 
@@ -507,7 +503,7 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
      */
     if (tfs->fsstat (hdr->name, &statend) < 0) {
         fprintf (stderr, "ftbackup: stat(%s) at end of backup error: %s\n", hdr->name, mystrerr (errno));
-    } else if (NANOTIME (statend.st_mtim) > NANOTIME (statbuf->st_mtim)) {
+    } else if (NANOTIME (statend.st_mtim) > hdr->mtimns) {
         fprintf (stderr, "ftbackup: directory %s modified during processing\n", hdr->name);
     }
 
