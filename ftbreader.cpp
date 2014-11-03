@@ -174,8 +174,8 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                     return EX_SSIO;
                 }
                 ssbasename = ssname;
-                sssegname  = (char *) alloca (ssnamelen + 16);
-                sprintf (sssegname, "%s.%.*u", ssname, SEGNODECDIGS, thissegno);
+                sssegname  = (char *) alloca (ssnamelen + SEGNODECDIGS + 4);
+                sprintf (sssegname, "%s%.*u", ssname, SEGNODECDIGS, thissegno);
                 ssfd = open (sssegname, O_RDONLY);
                 if (ssfd < 0) {
                     fprintf (stderr, "ftbackup: open(%s) error: %s\n", sssegname, mystrerr (errno));
@@ -1341,7 +1341,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
          * There is a next segment file, so close the last one and try to open next one.
          */
         close (ssfd);
-        sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, thissegno);
+        sprintf (sssegname, "%s%.*u", ssbasename, SEGNODECDIGS, thissegno);
         ssfd = open (sssegname, O_RDONLY);
         if (ssfd < 0) {
             fprintf (stderr, "ftbackup: open(%s) error: %s\n", sssegname, mystrerr (errno));
@@ -1469,10 +1469,10 @@ static uint32_t findnextsegno (char const *basename, uint32_t lastsegno)
         name = de->d_name;
 
         /*
-         * The name must be exactly <base name> <dot> <exactly SEGNODECDIGS decimal digits>.
+         * The name must be exactly <base name> <exactly SEGNODECDIGS decimal digits>.
          */
-        if (((int) strlen (name) == plen + SEGNODECDIGS + 1) && (memcmp (name, basename, plen) == 0) && (name[plen] == '.')) {
-            segno = strtoul (name + plen + 1, &p, 10);
+        if (((int) strlen (name) == plen + SEGNODECDIGS) && (memcmp (name, basename, plen) == 0)) {
+            segno = strtoul (name + plen, &p, 10);
             if ((*p == 0) && (segno > lastsegno)) {
                 nextsegno = segno;
                 break;

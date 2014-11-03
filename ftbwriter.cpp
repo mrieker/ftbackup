@@ -198,7 +198,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
             ssbasename = ssname;
             sssegname  = (char *) alloca (strlen (ssbasename) + SEGNODECDIGS + 4);
             ssname     = sssegname;
-            sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, thissegno);
+            sprintf (sssegname, "%s%.*u", ssbasename, SEGNODECDIGS, thissegno);
         }
         ssfd = open (ssname, O_WRONLY | O_APPEND | ooptions);
         if (ssfd < 0) {
@@ -218,7 +218,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
                 ssbasename = ssname;
                 sssegname  = (char *) alloca (strlen (ssbasename) + SEGNODECDIGS + 4);
                 ssname     = sssegname;
-                sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
+                sprintf (sssegname, "%s%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
             }
             ssfd = open (ssname, O_WRONLY | O_CREAT | O_TRUNC | ooptions, 0666);
             if (ssfd < 0) {
@@ -1430,7 +1430,7 @@ void FTBWriter::write_ssblock (Block *block)
             fprintf (stderr, "ftbackup: close(%s) saveset error: %s\n", sssegname, mystrerr (errno));
             exit (EX_SSIO);
         }
-        sprintf (sssegname, "%s.%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
+        sprintf (sssegname, "%s%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
         ssfd = open (sssegname, O_WRONLY | O_CREAT | O_TRUNC | ooptions, 0666);
         if (ssfd < 0) {
             fprintf (stderr, "ftbackup: creat(%s) saveset error: %s\n", sssegname, mystrerr (errno));
