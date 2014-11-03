@@ -433,6 +433,9 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
         for (rofs = 0; rofs < hdr->size; rofs += len) {
             len = hdr->size - rofs;
             if (len > sizeof buf) len = sizeof buf;
+            if ((strcmp (hdr->name, "/lib/modules/2.6.32-131.12.1.el6.x86_64-custom/kernel/drivers/dma/ioat/ioatdma.ko") == 0) && (rofs == 786432)) {
+                asm volatile ("int3 ; nop");
+            }
             read_raw (buf, len, true);
             if (fd >= 0) {
                 for (wofs = 0; wofs < len; wofs += rc) {
@@ -772,8 +775,15 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
             /*
              * Unzip some stuff.
              */
-            rc = inflate (&zstrm, Z_NO_FLUSH);
-            if ((rc != Z_OK) && (rc != Z_NEED_DICT) && ((rc != Z_STREAM_END) || (zstrm.avail_out != 0))) {
+            rc = inflate (&zstrm, Z_SYNC_FLUSH);
+            if (rc == Z_STREAM_END) {
+                rc = inflateEnd (&zstrm);
+                if (rc != Z_OK) INTERR (inflateEnd, rc);
+                VERIFYZMARKER (ZSUFFIX);
+                zisopen = false;
+                continue;
+            }
+            if ((rc != Z_OK) && (rc != Z_NEED_DICT)) {
                 fprintf (stderr, "ftbackup: inflate() error %d\n", rc);
                 inflateEnd (&zstrm);
                 zisopen = false;
@@ -803,8 +813,8 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
                     /*
                      * Free off all unzipper context.
                      */
-                    zstrm.avail_out = 0;
-                    zstrm.next_out  = NULL;
+                    zstrm.avail_out = sizeof junk;
+                    zstrm.next_out  = junk;
                     rc = inflateEnd (&zstrm);
                     if (rc != Z_OK) INTERR (inflateEnd, rc);
                     VERIFYZMARKER (DEBZSUFFIX);

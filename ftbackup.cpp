@@ -6,11 +6,16 @@
 #include "ftbreader.h"
 #include "ftbwriter.h"
 
+#include <signal.h>
 #include <termios.h>
+
+static char *volatile siginthand_cpoutname;
+static FTBWriter *siginthand_ftbwriter;
 
 static int cmd_backup (int argc, char **argv);
 static bool write_nanos_to_file (uint64_t nanos, char const *name);
 static uint64_t read_nanos_from_file (char const *name);
+static void siginthand (int signum);
 
 static int cmd_compare (int argc, char **argv);
 
@@ -143,12 +148,14 @@ int main (int argc, char **argv)
  */
 static int cmd_backup (int argc, char **argv)
 {
+    bool restart;
     char *p, *rootpath, *ssname;
     FTBWriter ftbwriter = FTBWriter ();
     int i, j, k;
     uint32_t blocksize;
     uint64_t spansize;
 
+    restart  = false;
     rootpath = NULL;
     ssname   = NULL;
 
@@ -189,6 +196,10 @@ static int cmd_backup (int argc, char **argv)
             if (strcasecmp (argv[i], "-record") == 0) {
                 if (++ i >= argc) goto usage;
                 if (!write_nanos_to_file (0, argv[i])) return EX_CMD;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-restart") == 0) {
+                restart = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-segsize") == 0) {
@@ -269,6 +280,23 @@ static int cmd_backup (int argc, char **argv)
         goto usage;
     }
 
+    // checkpoint if user does control-C
+    siginthand_cpoutname = (char *) alloca (strlen (ssname) + 4);
+    sprintf (siginthand_cpoutname, "%s.cp", ssname);
+    siginthand_ftbwriter = &ftbwriter;
+    if (signal (SIGINT, siginthand) == SIG_ERR) {
+        fprintf (stderr, "ftbackup: signal(SIGINT) error: %s\n", strerror (errno));
+    }
+
+    // if restart mode, tell write_saveset() where to begin
+    // otherwise, delete any old restart file laying around cuz it will be no good once we start writing
+    if (restart) {
+        fprintf (stderr, "ftbackup: attempting restart from %s\n", siginthand_cpoutname);
+        ftbwriter.start_cpin (siginthand_cpoutname);
+    } else {
+        unlink (siginthand_cpoutname);
+    }
+
     // write saveset...
     ftbwriter.tfs = &fullFSAccess;
     return ftbwriter.write_saveset (ssname, rootpath);
@@ -285,6 +313,7 @@ usage:
     fprintf (stderr, "    -odirect              use O_DIRECT when writing saveset\n");
     fprintf (stderr, "    -osync                use O_SYNC when writing saveset\n");
     fprintf (stderr, "    -record <file>        record backup date/time to given file\n");
+    fprintf (stderr, "    -restart              restart a checkpointed backup\n");
     fprintf (stderr, "    -segsize <segsz>      write saveset to multiple files, each of maximum size <segsz>\n");
     fprintf (stderr, "                            default is to write saveset to one file no matter how big\n");
     fprintf (stderr, "                            <segsz> %% (<bs> * <xorgc> * (<xorsc> + 1)) == 0\n");
@@ -375,6 +404,23 @@ static uint64_t read_nanos_from_file (char const *name)
     structtm.tm_mon  --;
     secs = timegm (&structtm);
     return secs * 1000000000ULL + nanos;
+}
+
+/**
+ * @brief Start checkpointing if user does a control-C.
+ */
+static void siginthand (int signum)
+{
+    char *cpoutname = NULL;
+    asm ("xchgq %1,%0" : "+m" (siginthand_cpoutname), "+r" (cpoutname) : : "cc");
+    if (cpoutname != NULL) {
+        signal (signum, SIG_DFL);
+        if (!siginthand_ftbwriter->start_cpout (cpoutname)) {
+            dprintf (STDERR_FILENO, "\nftbackup: creat(%s) error: %s\n", cpoutname, mystrerr (errno));
+            exit (EX_SSIO);
+        }
+        dprintf (STDERR_FILENO, "\nftbackup: writing checkpoint to %s\n", cpoutname);
+    }
 }
 
 /**
