@@ -452,7 +452,9 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
 
         /*
          * If so, reload old header contents (the name is the same we hope).
-         * It is critical to get the original size in case it has changed.
+         * It is critical to get the original size in case it has changed,
+         * cuz the header has already been written to the saveset with the
+         * original size.
          */
         JSon *regf = cpinstack->poptop ();
         if (regf != NULL) {
@@ -490,18 +492,24 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     for (; ofs < hdr->size; ofs += rc) {
         if (cpout) goto cpoutreq;
         len = hdr->size - ofs;
-        if (len > 16384) len = 16384;
-        len = (len + PAGESIZE - 1) & -PAGESIZE;
-        rc  = posix_memalign ((void **)&buf, PAGESIZE, len);
+        if (len > FILEIOSIZE) len = FILEIOSIZE;
+        rc  = posix_memalign ((void **)&buf, PAGESIZE, (len + PAGESIZE - 1) & -PAGESIZE);
         if (rc != 0) NOMEM ();
         if (ok) {
-            rc = tfs->fsread (fd, buf, len);
-            if (rc <= 0) {
-                fprintf (stderr, "ftbackup: read(%s@0x%llX) error: %s\n", hdr->name, ofs, ((rc == 0) ? "end of file" : mystrerr (errno)));
+            rc = tfs->fspread (fd, buf, len, ofs);
+            if (rc < 0) {
+                fprintf (stderr, "ftbackup: pread(%s, ..., %llu, %llu) error: %s\n",
+                        hdr->name, len, ofs, mystrerr (errno));
                 ok = false;
+                memset (buf, 0x69, len);
+                rc = len;
+            } else if ((uint32_t) rc < len) {
+                fprintf (stderr, "ftbackup: pread(%s, ..., %llu, %llu) error: only got %d byte%s\n",
+                        hdr->name, len, ofs, rc, ((rc == 1) ? "" : "s"));
+                ok = false;
+                memset (buf + rc, 0x69, len - rc);
             }
-        }
-        if (!ok) {
+        } else {
             memset (buf, 0x69, len);
             rc = len;
         }
@@ -920,17 +928,6 @@ void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
     }                                                                   \
 } while (false)
 
-#define OUTPUTZMARKER(zmarker) \
-    for (uint32_t i = 0; i < strlen (zmarker); i ++) {  \
-        CHECKROOM;                                      \
-        if (i == 0) {                                   \
-            fprintf (stderr, "compr_thread*: %s %6u %5u\n", zmarker, lastseqno + 1, bs - zstrm.avail_out); \
-        }                                               \
-        *(zstrm.next_out ++) = zmarker[i];              \
-        -- zstrm.avail_out;                             \
-        CHECKFULL;                                      \
-    }
-
 void *FTBWriter::compr_thread_wrapper (void *ftbw)
 {
     return ((FTBWriter *) ftbw)->compr_thread ();
@@ -940,7 +937,7 @@ void *FTBWriter::compr_thread ()
     Block *block;
     int dty, rc;
     ComprSlot slot;
-    uint32_t bs, len;
+    uint32_t bs, i, len;
     void *buf;
 
     block = NULL;
@@ -1028,7 +1025,6 @@ void *FTBWriter::compr_thread ()
          */
         if (dty > 0) {
             if (!zisopen) {
-                OUTPUTZMARKER (DEBZPREFIX);
                 void    *no = zstrm.next_out;
                 uint32_t ao = zstrm.avail_out;
                 memset (&zstrm, 0, sizeof zstrm);
@@ -1061,7 +1057,6 @@ void *FTBWriter::compr_thread ()
                 if (rc != Z_STREAM_END) INTERR (deflate, rc);
                 rc = deflateEnd (&zstrm);
                 if (rc != Z_OK) INTERR (deflateEnd, rc);
-                OUTPUTZMARKER (DEBZSUFFIX);
                 zisopen = false;
             }
 

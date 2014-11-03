@@ -24,6 +24,7 @@
 #define DEFBLOCKSIZE (32768U)
 #define MAXBLOCKSIZE (1024*1024*1024U)
 #define SEGNODECDIGS 6
+#define FILEIOSIZE (32768U)
 
 #define DEFXORSC 31 // write one XOR block per 31 data blocks
 #define DEFXORGC 2  // write XOR blocks in groups of 2, ie, after 62 data blocks
@@ -35,9 +36,6 @@
 
 #define BLOCK_MAGIC  "ftbackup"
 #define HEADER_MAGIC "ftbheder"
-
-#define DEBZPREFIX "ZBEG"
-#define DEBZSUFFIX "ZEND"
 
 #define HFL_HDLINK 0x01  // regular file is an hardlink
 

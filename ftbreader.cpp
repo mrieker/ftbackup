@@ -366,7 +366,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
     struct stat statbuf;
     uint32_t oldfileno, wofs;
     uint64_t len, rofs;
-    uint8_t buf[32768];
+    uint8_t buf[FILEIOSIZE];
 
     /*
      * See if it's an hardlink to an earlier file in the saveset.
@@ -410,7 +410,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
 
             /*
              * Enter in list of restored regular files in case there is
-             * a leter reference to the file via hardlinked file number.
+             * a later reference to the file via hardlinked file number.
              */
             if (inodessize <= hdr->fileno) {
                 do inodessize += inodessize / 2 + 10;
@@ -433,9 +433,6 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
         for (rofs = 0; rofs < hdr->size; rofs += len) {
             len = hdr->size - rofs;
             if (len > sizeof buf) len = sizeof buf;
-            if ((strcmp (hdr->name, "/lib/modules/2.6.32-131.12.1.el6.x86_64-custom/kernel/drivers/dma/ioat/ioatdma.ko") == 0) && (rofs == 786432)) {
-                asm volatile ("int3 ; nop");
-            }
             read_raw (buf, len, true);
             if (fd >= 0) {
                 for (wofs = 0; wofs < len; wofs += rc) {
@@ -716,23 +713,6 @@ bool FTBReader::read_special (Header *hdr, char const *dstname)
  * @param zip = true: data in saveset is compressed, unzip it
  *             false: data in saveset is uncompressed, copy it
  */
-#define VERIFYZMARKER(zmarker) \
-    for (uint32_t i = 0; i < strlen (zmarker); i ++) {  \
-        if (zstrm.avail_in == 0) {                      \
-            read_block (false);                         \
-        }                                               \
-        if (i == 0) {                                   \
-            fprintf (stderr, "read_raw*: %s %6u %5u\n", zmarker, lastseqno, (1 << l2bs) - zstrm.avail_in); \
-        }                                               \
-        -- zstrm.avail_in;                              \
-        if (*(zstrm.next_in ++) != zmarker[i]) {        \
-            asm volatile ("int3 ; nop");                \
-        }                                               \
-    }                                                   \
-    if (zstrm.avail_in == 0) {                          \
-        read_block (false);                             \
-    }
-
 void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
 {
     int rc;
@@ -757,7 +737,6 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
              * It is zipped, make sure our unzipper is open.
              */
             if (!zisopen) {
-                VERIFYZMARKER (DEBZPREFIX);
                 uint32_t ai = zstrm.avail_in;
                 uint32_t ao = zstrm.avail_out;
                 Bytef   *ni = zstrm.next_in;
@@ -779,7 +758,6 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
             if (rc == Z_STREAM_END) {
                 rc = inflateEnd (&zstrm);
                 if (rc != Z_OK) INTERR (inflateEnd, rc);
-                VERIFYZMARKER (ZSUFFIX);
                 zisopen = false;
                 continue;
             }
@@ -817,7 +795,6 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
                     zstrm.next_out  = junk;
                     rc = inflateEnd (&zstrm);
                     if (rc != Z_OK) INTERR (inflateEnd, rc);
-                    VERIFYZMARKER (DEBZSUFFIX);
                     zisopen = false;
                 }
 
