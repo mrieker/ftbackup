@@ -1267,7 +1267,7 @@ void FTBackup::print_header (FILE *out, Header *hdr, char const *name)
     time_t sec;
 
     ftype =
-        S_ISREG  (hdr->stmode) ? '-' :
+        S_ISREG  (hdr->stmode) ? ((hdr->flags & HFL_HDLINK) ? 'h' : '-') :
         S_ISDIR  (hdr->stmode) ? 'd' :
         S_ISLNK  (hdr->stmode) ? 'l' :
         S_ISFIFO (hdr->stmode) ? 'p' :
