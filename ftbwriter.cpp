@@ -626,6 +626,21 @@ void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
  * @brief Take data from comprqueue queue, optionally compress,
  *        and put in blocks for writequeue queue.
  */
+#define CHECKROOM do { \
+    if (zstrm.avail_out == 0) {                                         \
+        block = malloc_block ();                                        \
+        zstrm.next_out  = block->data;                                  \
+        zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;   \
+    }                                                                   \
+} while (false)
+
+#define CHECKFULL do { \
+    if (zstrm.avail_out == 0) {                                         \
+        queue_data_block (block);                                       \
+        block = NULL;                                                   \
+    }                                                                   \
+} while (false)
+
 void *FTBWriter::compr_thread_wrapper (void *ftbw)
 {
     return ((FTBWriter *) ftbw)->compr_thread ();
@@ -673,17 +688,10 @@ void *FTBWriter::compr_thread ()
             zstrm.next_in  = (Bytef *) buf;
             zstrm.avail_in = len;
             while (zstrm.avail_in > 0) {
-                if (zstrm.avail_out == 0) {
-                    block = malloc_block ();
-                    zstrm.next_out  = block->data;
-                    zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;
-                }
+                CHECKROOM;
                 rc = deflate (&zstrm, Z_NO_FLUSH);
                 if (rc != Z_OK) INTERR (deflate, rc);
-                if (zstrm.avail_out == 0) {
-                    queue_data_block (block);
-                    block = NULL;
-                }
+                CHECKFULL;
             }
         }
 
@@ -693,16 +701,9 @@ void *FTBWriter::compr_thread ()
         else {
             if (zisopen) {
                 do {
-                    if (zstrm.avail_out == 0) {
-                        block = malloc_block ();
-                        zstrm.next_out  = block->data;
-                        zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;
-                    }
+                    CHECKROOM;
                     rc = deflate (&zstrm, Z_FINISH);
-                    if (zstrm.avail_out == 0) {
-                        queue_data_block (block);
-                        block = NULL;
-                    }
+                    CHECKFULL;
                 } while (rc == Z_OK);
                 if (rc != Z_STREAM_END) INTERR (deflate, rc);
                 rc = deflateEnd (&zstrm);
@@ -718,11 +719,7 @@ void *FTBWriter::compr_thread ()
             zstrm.avail_in = len;
             do {
                 // maybe we need a new output block
-                if (zstrm.avail_out == 0) {
-                    block = malloc_block ();
-                    zstrm.next_out  = block->data;
-                    zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;
-                }
+                CHECKROOM;
 
                 // if first header in the block, save its offset for recoveries
                 if ((dty < 0) && (block->hdroffs == 0)) {
@@ -744,10 +741,7 @@ void *FTBWriter::compr_thread ()
                 zstrm.avail_in  -= len;
 
                 // if output block full, queue it for writing
-                if (zstrm.avail_out == 0) {
-                    queue_data_block (block);
-                    block = NULL;
-                }
+                CHECKFULL;
             } while (zstrm.avail_in > 0);
         }
 
