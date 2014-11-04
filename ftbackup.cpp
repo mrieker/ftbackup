@@ -21,6 +21,7 @@ static int cmd_compare (int argc, char **argv);
 
 static int cmd_diff (int argc, char **argv);
 static bool diff_file (char const *path1, char const *path2);
+static char *formatime (char *buff, time_t time);
 static bool diff_regular (char const *path1, char const *path2);
 static bool diff_directory (char const *path1, char const *path2);
 static bool issocket (char const *path, char const *file);
@@ -707,10 +708,14 @@ int CompFSAccess::fsmknod (char const *name, mode_t mode, dev_t rdev)
 static int cmd_diff (int argc, char **argv)
 {
     char *dir1, *dir2;
+    int rc;
+
     if (argc != 3) goto usage;
     dir1 = argv[1];
     dir2 = argv[2];
-    return diff_file (dir1, dir2) ? EX_SSIO : EX_OK;
+    rc = diff_file (dir1, dir2) ? EX_SSIO : EX_OK;
+    printf ("\n");
+    return rc;
 
 usage:
     fprintf (stderr, "usage: ftbackup diff <path1> <path2>\n");
@@ -720,32 +725,37 @@ usage:
 static bool diff_file (char const *path1, char const *path2)
 {
     bool err;
-    int rc1, rc2;
+    char time1[24], time2[24];
+    int len, rc1, rc2;
     struct stat stat1, stat2;
 
     rc1 = lstat (path1, &stat1);
     if (rc1 < 0) {
-        printf ("diff file lstat %s error: %s\n", path1, mystrerr (errno));
+        printf ("\ndiff file lstat %s error: %s\n", path1, mystrerr (errno));
         return true;
     }
     rc2 = lstat (path2, &stat2);
     if (rc2 < 0) {
-        printf ("diff file lstat %s error: %s\n", path2, mystrerr (errno));
+        printf ("\ndiff file lstat %s error: %s\n", path2, mystrerr (errno));
         return true;
     }
 
     err = false;
+    len = (strlen (path1) > strlen (path2)) ? strlen (path1) : strlen (path2);
+
     if (stat1.st_mode != stat2.st_mode) {
-        printf ("diff file mode mismatch %s (0%o) vs %s (0%o)\n", path1, stat1.st_mode, path2, stat2.st_mode);
+        printf ("\ndiff file mode mismatch\n  %*s  0%.6o\n  %*s  0%.6o\n",
+                len, path1, stat1.st_mode,
+                len, path2, stat2.st_mode);
         if ((stat1.st_mode ^ stat2.st_mode) & S_IFMT) return true;
         err = true;
     }
 
     if ((stat1.st_mtim.tv_sec  != stat2.st_mtim.tv_sec) ||
         (stat1.st_mtim.tv_nsec != stat2.st_mtim.tv_nsec)) {
-        printf ("diff file mtime mismatch %s (%ld.%09ld) vs %s (%ld.%09ld)\n",
-                path1, stat1.st_mtim.tv_sec, stat1.st_mtim.tv_nsec,
-                path2, stat2.st_mtim.tv_sec, stat2.st_mtim.tv_nsec);
+        printf ("\ndiff file mtime mismatch\n  %*s  %s.%09ld\n  %*s  %s.%09ld\n",
+                len, path1, formatime (time1, stat1.st_mtim.tv_sec), stat1.st_mtim.tv_nsec,
+                len, path2, formatime (time2, stat2.st_mtim.tv_sec), stat2.st_mtim.tv_nsec);
         err = true;
     }
 
@@ -755,52 +765,73 @@ static bool diff_file (char const *path1, char const *path2)
     return err | diff_special (path1, path2, &stat1, &stat2);
 }
 
+static char *formatime (char *buff, time_t time)
+{
+    struct tm tm;
+    tm = *localtime (&time);
+    sprintf (buff, "%04d-%02d-%02d %02d:%02d:%02d",
+            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return buff;
+}
+
 static bool diff_regular (char const *path1, char const *path2)
 {
     bool err;
-    int fd1, fd2, rc1, rc2;
-    uint8_t buf1[32768], buf2[32768];
+    int fd1, fd2, len, rc1, rc2;
+    uint8_t buf1[FILEIOSIZE], buf2[FILEIOSIZE];
+    uint64_t ofs;
 
     fd1 = open (path1, O_RDONLY | O_NOATIME);
     if (fd1 < 0) fd1 = open (path1, O_RDONLY);
     if (fd1 < 0) {
-        printf ("diff regular open %s error: %s\n", path1, mystrerr (errno));
+        printf ("\ndiff regular open %s error: %s\n", path1, mystrerr (errno));
         return true;
     }
 
     fd2 = open (path2, O_RDONLY | O_NOATIME);
     if (fd2 < 0) fd2 = open (path2, O_RDONLY);
     if (fd2 < 0) {
-        printf ("diff regular open %s error: %s\n", path2, mystrerr (errno));
+        printf ("\ndiff regular open %s error: %s\n", path2, mystrerr (errno));
         close (fd1);
         return true;
     }
 
     err = false;
+    len = (strlen (path1) > strlen (path2)) ? strlen (path1) : strlen (path2);
+
+    ofs = 0;
     while (true) {
         rc1 = read (fd1, buf1, sizeof buf1);
         if (rc1 < 0) {
-            printf ("diff regular read %s error: %s\n", path1, mystrerr (errno));
+            printf ("\ndiff regular read %s error: %s\n", path1, mystrerr (errno));
             err = true;
             break;
         }
         rc2 = read (fd2, buf2, sizeof buf2);
         if (rc2 < 0) {
-            printf ("diff regular read %s error: %s\n", path2, mystrerr (errno));
+            printf ("\ndiff regular read %s error: %s\n", path2, mystrerr (errno));
             err = true;
             break;
         }
         if (rc1 != rc2) {
-            printf ("diff regular length mismatch %s vs %s\n", path1, path2);
+            printf ("\ndiff regular length mismatch\n  %*s  %12llu\n  %*s  %12llu\n", 
+                    len, path1, ofs + rc1,
+                    len, path2, ofs + rc2);
             err = true;
             break;
         }
         if (rc1 == 0) break;
-        if (memcmp (buf1, buf2, rc1) != 0) {
-            printf ("diff regular content mismatch %s vs %s\n", path1, path2);
+        for (rc2 = 0; rc2 < rc1; rc2 ++) {
+            if (buf1[rc2] != buf2[rc2]) break;
+        }
+        if (rc2 < rc1) {
+            printf ("\ndiff regular content mismatch\n  %*s  %12llu/%02X\n  %*s  %12llu/%02X\n",
+                    len, path1, ofs + rc2, buf1[rc2],
+                    len, path2, ofs + rc2, buf2[rc2]);
             err = true;
             break;
         }
+        ofs += rc1;
     }
 
     close (fd1);
@@ -817,7 +848,7 @@ static bool diff_directory (char const *path1, char const *path2)
 
     nents1 = scandir (path1, &names1, NULL, alphasort);
     if (nents1 < 0) {
-        printf ("diff directory scandir %s error: %s\n", path1, mystrerr (errno));
+        printf ("\ndiff directory scandir %s error: %s\n", path1, mystrerr (errno));
         return true;
     }
 
@@ -825,7 +856,7 @@ static bool diff_directory (char const *path1, char const *path2)
 
     nents2 = scandir (path2, &names2, NULL, alphasort);
     if (nents2 < 0) {
-        printf ("diff directory scandir %s error: %s\n", path2, mystrerr (errno));
+        printf ("\ndiff directory scandir %s error: %s\n", path2, mystrerr (errno));
         names2 = NULL;
         goto done;
     }
@@ -870,7 +901,7 @@ static bool diff_directory (char const *path1, char const *path2)
         // if second array empty or its name is after first, first array has a unique name
         if ((j >= nents2) || (cmp < 0)) {
             if (!issocket (path1, file1)) {
-                printf ("diff directory only %s contains %s\n", path1, file1);
+                printf ("\ndiff directory only %s contains %s\n", path1, file1);
                 err = true;
             }
             i ++;
@@ -880,7 +911,7 @@ static bool diff_directory (char const *path1, char const *path2)
         // if first array empty or its name is after second, second array has a unique name
         if ((i >= nents1) || (cmp > 0)) {
             if (!issocket (path2, file2)) {
-                printf ("diff directory only %s contains %s\n", path2, file2);
+                printf ("\ndiff directory only %s contains %s\n", path2, file2);
                 err = true;
             }
             j ++;
@@ -973,26 +1004,25 @@ static bool ismountpointoremptydir (char const *name)
 static bool diff_symlink (char const *path1, char const *path2)
 {
     char buf1[32768], buf2[32768];
-    int rc1, rc2;
+    int len, rc1, rc2;
 
     rc1 = readlink (path1, buf1, sizeof buf1);
     if (rc1 < 0) {
-        printf ("diff symlink %s read error: %s\n", path1, mystrerr (errno));
+        printf ("\ndiff symlink %s read error: %s\n", path1, mystrerr (errno));
         return true;
     }
     rc2 = readlink (path2, buf2, sizeof buf2);
     if (rc2 < 0) {
-        printf ("diff symlink %s read error: %s\n", path2, mystrerr (errno));
+        printf ("\ndiff symlink %s read error: %s\n", path2, mystrerr (errno));
         return true;
     }
 
-    if (rc1 != rc2) {
-        printf ("diff symlink length mismatch %s (%d) vs %s (%d)\n", path1, rc1, path2, rc2);
-        return true;
-    }
-    if (memcmp (buf1, buf2, rc1) != 0) {
-        printf ("diff symlink value mismatch %s (%*.*s) vs %s (%*.*s)\n",
-                path1, rc1, rc1, buf1, path2, rc2, rc2, buf2);
+    len = (strlen (path1) > strlen (path2)) ? strlen (path1) : strlen (path2);
+
+    if ((rc1 != rc2) || (memcmp (buf1, buf2, rc1) != 0)) {
+        printf ("\ndiff symlink value mismatch\n  %*s  <%*.*s>\n  %*s  <%*.*s>\n",
+                len, path1, rc1, rc1, buf1,
+                len, path2, rc2, rc2, buf2);
         return true;
     }
     return false;
@@ -1000,9 +1030,13 @@ static bool diff_symlink (char const *path1, char const *path2)
 
 static bool diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2)
 {
+    int len;
+
     if (stat1->st_rdev != stat2->st_rdev) {
-        printf ("diff special rdev mismatch %s (0x%lX) vs %s (0x%lX)\n",
-                path1, stat1->st_rdev, path2, stat2->st_rdev);
+        len = (strlen (path1) > strlen (path2)) ? strlen (path1) : strlen (path2);
+        printf ("\ndiff special rdev mismatch\n  %*s  0x%.8lX\n  %*s  0x%.8lX\n",
+                len, path1, stat1->st_rdev,
+                len, path2, stat2->st_rdev);
         return true;
     }
     return false;
