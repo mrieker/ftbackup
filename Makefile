@@ -17,13 +17,11 @@ $(VERFILE):
 	rm -f *.ver
 	touch $(VERFILE)
 
-cryptopp562/libcryptopp.a: cryptopp562
-	cd cryptopp562 ; $(MAKE) libcryptopp.a
-
-cryptopp562: cryptopp562.zip
+cryptopp562/libcryptopp.a: cryptopp562.zip
 	rm -rf cryptopp562
 	mkdir cryptopp562
 	cd cryptopp562 ; unzip ../cryptopp562.zip
-	patch cryptopp562/files.cpp < crpytopp562.files.cpp.patch
+	patch cryptopp562/files.cpp < cryptopp562.files.cpp.patch
 	patch cryptopp562/misc.h < cryptopp562.misc.h.patch
+	cd cryptopp562 ; $(MAKE) libcryptopp.a
 
