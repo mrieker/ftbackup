@@ -725,12 +725,12 @@ static bool diff_file (char const *path1, char const *path2)
 
     rc1 = lstat (path1, &stat1);
     if (rc1 < 0) {
-        printf ("diff file lstat %s error %d\n", path1, errno);
+        printf ("diff file lstat %s error: %s\n", path1, mystrerr (errno));
         return true;
     }
     rc2 = lstat (path2, &stat2);
     if (rc2 < 0) {
-        printf ("diff file lstat %s error %d\n", path2, errno);
+        printf ("diff file lstat %s error: %s\n", path2, mystrerr (errno));
         return true;
     }
 
@@ -764,14 +764,14 @@ static bool diff_regular (char const *path1, char const *path2)
     fd1 = open (path1, O_RDONLY | O_NOATIME);
     if (fd1 < 0) fd1 = open (path1, O_RDONLY);
     if (fd1 < 0) {
-        printf ("diff regular open %s error %d\n", path1, errno);
+        printf ("diff regular open %s error: %s\n", path1, mystrerr (errno));
         return true;
     }
 
     fd2 = open (path2, O_RDONLY | O_NOATIME);
     if (fd2 < 0) fd2 = open (path2, O_RDONLY);
     if (fd2 < 0) {
-        printf ("diff regular open %s error %d\n", path2, errno);
+        printf ("diff regular open %s error: %s\n", path2, mystrerr (errno));
         close (fd1);
         return true;
     }
@@ -780,13 +780,13 @@ static bool diff_regular (char const *path1, char const *path2)
     while (true) {
         rc1 = read (fd1, buf1, sizeof buf1);
         if (rc1 < 0) {
-            printf ("diff regular read %s error %d\n", path1, errno);
+            printf ("diff regular read %s error: %s\n", path1, mystrerr (errno));
             err = true;
             break;
         }
         rc2 = read (fd2, buf2, sizeof buf2);
         if (rc2 < 0) {
-            printf ("diff regular read %s error %d\n", path2, errno);
+            printf ("diff regular read %s error: %s\n", path2, mystrerr (errno));
             err = true;
             break;
         }
@@ -817,7 +817,7 @@ static bool diff_directory (char const *path1, char const *path2)
 
     nents1 = scandir (path1, &names1, NULL, alphasort);
     if (nents1 < 0) {
-        printf ("diff directory scandir %s error %d\n", path1, errno);
+        printf ("diff directory scandir %s error: %s\n", path1, mystrerr (errno));
         return true;
     }
 
@@ -825,7 +825,7 @@ static bool diff_directory (char const *path1, char const *path2)
 
     nents2 = scandir (path2, &names2, NULL, alphasort);
     if (nents2 < 0) {
-        printf ("diff directory scandir %s error %d\n", path2, errno);
+        printf ("diff directory scandir %s error: %s\n", path2, mystrerr (errno));
         names2 = NULL;
         goto done;
     }
@@ -977,12 +977,12 @@ static bool diff_symlink (char const *path1, char const *path2)
 
     rc1 = readlink (path1, buf1, sizeof buf1);
     if (rc1 < 0) {
-        printf ("diff symlink %s read error %d\n", path1, errno);
+        printf ("diff symlink %s read error: %s\n", path1, mystrerr (errno));
         return true;
     }
     rc2 = readlink (path2, buf2, sizeof buf2);
     if (rc2 < 0) {
-        printf ("diff symlink %s read error %d\n", path2, errno);
+        printf ("diff symlink %s read error: %s\n", path2, mystrerr (errno));
         return true;
     }
 
