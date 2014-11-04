@@ -23,6 +23,8 @@ static int cmd_diff (int argc, char **argv);
 static bool diff_file (char const *path1, char const *path2);
 static bool diff_regular (char const *path1, char const *path2);
 static bool diff_directory (char const *path1, char const *path2);
+static bool issocket (char const *path, char const *file);
+static bool ismountpointoremptydir (char const *name);
 static bool diff_symlink (char const *path1, char const *path2);
 static bool diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2);
 
@@ -747,9 +749,9 @@ static bool diff_file (char const *path1, char const *path2)
         err = true;
     }
 
-    if (S_ISREG (stat1.st_mode)) return err | diff_regular   (path1, path2);
-    if (S_ISDIR (stat1.st_mode)) return err | diff_directory (path1, path2);
-    if (S_ISLNK (stat1.st_mode)) return err | diff_symlink   (path1, path2);
+    if (S_ISREG  (stat1.st_mode)) return err | diff_regular   (path1, path2);
+    if (S_ISDIR  (stat1.st_mode)) return err | diff_directory (path1, path2);
+    if (S_ISLNK  (stat1.st_mode)) return err | diff_symlink   (path1, path2);
     return err | diff_special (path1, path2, &stat1, &stat2);
 }
 
@@ -842,8 +844,8 @@ static bool diff_directory (char const *path1, char const *path2)
     name2 = (char *) alloca (len2 + longest + 2);
     memcpy (name1, path1, len1);
     memcpy (name2, path2, len2);
-    name1[len1++] = '/';
-    name2[len2++] = '/';
+    if ((len1 > 0) && (name1[len1-1] != '/')) name1[len1++] = '/';
+    if ((len2 > 0) && (name2[len2-1] != '/')) name2[len2++] = '/';
 
     cmp = 0;
     err = false;
@@ -867,24 +869,37 @@ static bool diff_directory (char const *path1, char const *path2)
 
         // if second array empty or its name is after first, first array has a unique name
         if ((j >= nents2) || (cmp < 0)) {
-            printf ("diff directory only %s contains %s\n", path1, file1);
+            if (!issocket (path1, file1)) {
+                printf ("diff directory only %s contains %s\n", path1, file1);
+                err = true;
+            }
             i ++;
-            err = true;
             continue;
         }
 
         // if first array empty or its name is after second, second array has a unique name
         if ((i >= nents1) || (cmp > 0)) {
-            printf ("diff directory only %s contains %s\n", path2, file2);
+            if (!issocket (path2, file2)) {
+                printf ("diff directory only %s contains %s\n", path2, file2);
+                err = true;
+            }
             j ++;
-            err = true;
             continue;
         }
 
-        // both names match, do nesting compare of files
+        // both names match
         strcpy (name1 + len1, file1);
         strcpy (name2 + len2, file2);
-        err |= diff_file (name1, name2);
+
+        // if both are either a mount point or an empty directory,
+        // don't bother comparing the contents, cuz a mount point
+        // gets backed up as an empty directory
+        if (!ismountpointoremptydir (name1) || !ismountpointoremptydir (name2)) {
+
+            // otherwise, compare the two entries
+            err |= diff_file (name1, name2);
+        }
+
         i ++; j ++;
     }
 
@@ -894,6 +909,65 @@ done:
     if (names1 != NULL) free (names1);
     if (names2 != NULL) free (names2);
     return err;
+}
+
+static bool issocket (char const *path, char const *file)
+{
+    char name[strlen(path)+strlen(file)+2];
+    struct stat statbuf;
+
+    sprintf (name, "%s/%s", path, file);
+    return (stat (name, &statbuf) >= 0) && S_ISSOCK (statbuf.st_mode);
+}
+
+static bool ismountpointoremptydir (char const *name)
+{
+    char copy[strlen(name)+1], *p;
+    DIR *innerdir;
+    struct dirent *de;
+    struct stat inner, outer;
+
+    /*
+     * If supplied file isn't a directory, it can't be
+     * either a mount point or an empty directory.
+     */
+    if (stat (name, &inner) < 0) return false;
+    if (!S_ISDIR (inner.st_mode)) return false;
+
+    /*
+     * See what device the given directory's directory is on.
+     */
+    strcpy (copy, name);
+    while (true) {
+        p = strrchr (copy, '/');
+        if (p == NULL) return false;
+        if (p[1] != 0) break;
+        *p = 0;
+    }
+    if (p == copy) p ++;
+    *p = 0;
+    if (stat (copy, &outer) < 0) return false;
+
+    /*
+     * If the two directories are on different devices,
+     * the given directory is a mount point.
+     */
+    if (outer.st_dev != inner.st_dev) return true;
+
+    /*
+     * Same device, see if the given directory is empty,
+     * ie, if it would normally be used as a mount point.
+     */
+    innerdir = opendir (name);
+    if (innerdir == NULL) return false;
+    while ((de = readdir (innerdir)) != NULL) {
+        if (strcmp (de->d_name, ".") == 0) continue;
+        if (strcmp (de->d_name, "..") == 0) continue;
+        closedir (innerdir);
+        return false;
+    }
+    closedir (innerdir);
+    return true;
 }
 
 static bool diff_symlink (char const *path1, char const *path2)
