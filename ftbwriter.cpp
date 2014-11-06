@@ -133,6 +133,8 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     pthread_t compr_thandl, encr_thandl, write_thandl;
     uint32_t i;
 
+    hashsize = (hasher == NULL) ? 0 : hasher->DigestSize ();
+
     cpinstack = NULL;
     if (cpin) {
 
@@ -411,7 +413,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     bool ok, reloaded;
     int fd, rc;
     struct stat statend;
-    uint32_t bs, i, plen;
+    uint32_t i, plen;
     uint64_t len, ofs;
     uint8_t *buf;
 
@@ -488,7 +490,6 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
      * Write file contents to saveset.
      * We always write the exact number of bytes shown in the header.
      */
-    bs = 1 << l2bs;
     for (; ofs < hdr->size; ofs += rc) {
         if (cpout) goto cpoutreq;
         len  = hdr->size - ofs;                                 // number of bytes to end-of-file
@@ -944,7 +945,7 @@ void *FTBWriter::compr_thread ()
     void *buf;
 
     block = NULL;
-    bs    = 1 << l2bs;
+    bs    = (1 << l2bs) - hashsize;
 
     if (xorgc > 0) {
         xorblocks = (Block **) calloc (xorgc, sizeof *xorblocks);
@@ -1189,7 +1190,7 @@ void FTBWriter::queue_data_block (Block *block)
     Block *xorblock;
     uint32_t bs, i, oldxorbc;
 
-    bs = 1 << l2bs;
+    bs = (1 << l2bs) - hashsize;
 
     /*
      * Fill in data block header.
@@ -1252,7 +1253,7 @@ void FTBWriter::queue_xor_blocks ()
     Block *block;
     uint32_t bs, i;
 
-    bs = 1 << l2bs;
+    bs = (1 << l2bs) - hashsize;
     for (i = 0; i < xorgc; i ++) {
         block = xorblocks[i];
         if (block != NULL) {
@@ -1324,7 +1325,7 @@ void *FTBWriter::encr_thread ()
 {
     Block *block;
     FILE *noncefile;
-    uint32_t bsq, cbs, i;
+    uint32_t bs, bsq, cbs, i;
     uint64_t *array;
 
     cbs = cripter->BlockSize ();
@@ -1339,7 +1340,12 @@ void *FTBWriter::encr_thread ()
     }
 
     /*
-     * Get block size in quadwords.
+     * Get block size in bytes, excluding hash bytes at the end.
+     */
+    bs  = (1 << l2bs) - hashsize;
+
+    /*
+     * Get block size in quadwords, including hash quadwords at the end.
      */
     bsq = 1 << (l2bs - 3);
 
@@ -1357,7 +1363,12 @@ void *FTBWriter::encr_thread ()
         }
 
         /*
-         * Use nonce for init vector and encrypt the rest of the block.
+         * Compute hash of block up to where the hash goes then put hash at end.
+         */
+        hasher->CalculateDigest ((uint8_t *)block + bs, (uint8_t *)block, bs);
+
+        /*
+         * Use nonce for init vector and encrypt the block, including the hash,
          * Leave magic number and everything else before nonce in plain text.
          */
         // enc[i] = encrypt ( clr[i] ^ enc[i-1] )

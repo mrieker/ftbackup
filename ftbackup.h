@@ -81,11 +81,13 @@ struct Header {
 };
 
 struct FTBackup {
-    uint8_t l2bs;
-    uint8_t xorgc;
-    uint8_t xorsc;
+    uint32_t hashsize;
+    uint8_t  l2bs;
+    uint8_t  xorgc;
+    uint8_t  xorsc;
 
     CryptoPP::BlockCipher *cripter;
+    CryptoPP::HashTransformation *hasher;
 
     FTBackup ();
     ~FTBackup ();

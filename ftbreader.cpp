@@ -111,6 +111,8 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
     int cmp, lastfilenofinished, ssnamelen;
     uint32_t dstprefixlen, hassegno, skipped, srcprefixlen;
 
+    hashsize = (hasher == NULL) ? 0 : hasher->DigestSize ();
+
     dstprefixlen = strlen (dstprefix);
     srcprefixlen = strlen (srcprefix);
 
@@ -878,7 +880,7 @@ nextblock:
     /*
      * Set up the data descriptor.
      */
-    zstrm.avail_in = (1 << l2bs) - offs;
+    zstrm.avail_in = (1 << l2bs) - offs - hashsize;
     zstrm.next_in  = (uint8_t *)rblock + offs;
     return rblock;
 }
@@ -957,7 +959,7 @@ void FTBReader::read_first_block ()
          */
         if (bytesCopied < bs) continue;
         tblock = &bigBlock->block;
-        decrypt_block (tblock, bs);
+        if (!decrypt_block (tblock, bs)) continue;
         xorgc = tblock->xorgc;
         xorsc = tblock->xorsc;
         if (blockisvalid (tblock)) break;
@@ -978,11 +980,11 @@ void FTBReader::read_first_block ()
         xorblocks = (Block **) malloc (xorgc * sizeof *xorblocks);
         if (xorblocks == NULL) NOMEM ();
         for (i = 0; i < xorgc; i ++) {
-            xorblocks[i] = (Block *) calloc (1, bs);
+            xorblocks[i] = (Block *) calloc (1, bs - hashsize);
             if (xorblocks[i] == NULL) NOMEM ();
         }
         i = (tblock->seqno - 1) % xorgc;
-        memcpy (xorblocks[i], tblock, bs);
+        memcpy (xorblocks[i], tblock, bs - hashsize);
 
         gotxors = (uint8_t *) calloc (xorgc, sizeof *gotxors);
         if (gotxors == NULL) NOMEM ();
@@ -1051,7 +1053,10 @@ noxoread:
         }
 
         // maybe decrypt the block
-        decrypt_block (&linkedBlock->block, bs);
+        if (!decrypt_block (&linkedBlock->block, bs)) {
+            fprintf (stderr, "ftbackup: pread(%llu) saveset error: block digest not valid\n", lastreadoffs);
+            goto noxoread;
+        }
 
         // make sure the magic number and checksum etc are valid
         // if not, treat it just like a read error
@@ -1129,7 +1134,10 @@ noxoread:
         /*
          * Maybe decrypt the block.
          */
-        decrypt_block (&linkedBlock->block, bs);
+        if (!decrypt_block (&linkedBlock->block, bs)) {
+            fprintf (stderr, "ftbackup: pread(%llu) saveset error: block digest not valid\n", lastreadoffs);
+            continue;
+        }
 
         /*
          * They should all have basic validity.
@@ -1167,7 +1175,7 @@ noxoread:
             if (linkedBlock->block.xorno >  lastxorno + xorgc) {
                 lastxorno = linkedBlock->block.xorno - xorgc;
                 memset (gotxors, 0, xorgc * sizeof *gotxors);
-                for (i = 0; i < xorgc; i ++) memset (xorblocks[i], 0, bs);
+                for (i = 0; i < xorgc; i ++) memset (xorblocks[i], 0, bs - hashsize);
             }
 
             /*
@@ -1180,7 +1188,7 @@ noxoread:
                  * There is exactly one missing data block from the group,
                  * so XORing in this one should recover the missing block.
                  */
-                xorblockdata (&linkedBlock->block, xorblocks[i], bs);
+                xorblockdata (&linkedBlock->block, xorblocks[i], bs - hashsize);
 
                 /*
                  * The result should be a valid data block.
@@ -1190,7 +1198,7 @@ noxoread:
                 linkedBlock->block.xorno  = 0;
                 linkedBlock->block.xorbc  = 0;
                 linkedBlock->block.chksum = 0;
-                linkedBlock->block.chksum = - checksumdata (&linkedBlock->block, bs);
+                linkedBlock->block.chksum = - checksumdata (&linkedBlock->block, bs - hashsize);
                 if (!blockisvalid (&linkedBlock->block)) {
                     fprintf (stderr, "ftbackup: recovered block at %llu is not valid\n", lastreadoffs);
                     continue;
@@ -1240,14 +1248,14 @@ noxoread:
         if (lastxorno < i) {
             lastxorno = i;
             memset (gotxors, 0, xorgc * sizeof *gotxors);
-            for (i = 0; i < xorgc; i ++) memset (xorblocks[i], 0, bs);
+            for (i = 0; i < xorgc; i ++) memset (xorblocks[i], 0, bs - hashsize);
         }
 
         /*
          * Valid data block, XOR it into group.
          */
         i = (linkedBlock->block.seqno - 1) % xorgc;
-        xorblockdata (xorblocks[i], &linkedBlock->block, bs);
+        xorblockdata (xorblocks[i], &linkedBlock->block, bs - hashsize);
         gotxors[i] ++;
 
         /*
@@ -1383,13 +1391,16 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
 
 /**
  * @brief Decrypt the block's contents if -decrypt option was given.
+ * @param block = block to decrypt
+ * @param bs = block size in bytes, including block header and including hash on the end
+ * @returns whether or not the hash validated
  */
-void FTBReader::decrypt_block (Block *block, uint32_t bs)
+bool FTBReader::decrypt_block (Block *block, uint32_t bs)
 {
-    decrypt_block (cripter, block, bs);
+    return decrypt_block (cripter, hasher, block, bs);
 }
 
-void FTBReader::decrypt_block (CryptoPP::BlockCipher *cripter, Block *block, uint32_t bs)
+bool FTBReader::decrypt_block (CryptoPP::BlockCipher *cripter, CryptoPP::HashTransformation *hasher, Block *block, uint32_t bs)
 {
     uint32_t i;
     uint64_t *array;
@@ -1416,9 +1427,16 @@ void FTBReader::decrypt_block (CryptoPP::BlockCipher *cripter, Block *block, uin
             default: abort ();
         }
 
+        bs -= hasher->DigestSize ();
+        if (!hasher->VerifyDigest ((uint8_t *)block + bs, (uint8_t *)block, bs)) {
+            return false;
+        }
+
         // so the checksum will work
         memset (block->nonce, 0, sizeof block->nonce);
     }
+
+    return true;
 }
 
 /**
@@ -1538,9 +1556,9 @@ static void updatetimes (IFSAccess *ifsa, char const *name, uint64_t atimns, uin
  */
 static bool rmdirentry (IFSAccess *ifsa, char const *dirname, char const *entname)
 {
+    bool ndel;
     char name[strlen(dirname)+strlen(entname)+2];
     DIR *dir;
-    int ndel;
     struct dirent *ent;
 
     if ((strcmp (entname, ".") == 0) || (strcmp (entname, "..") == 0)) return false;
@@ -1550,7 +1568,7 @@ static bool rmdirentry (IFSAccess *ifsa, char const *dirname, char const *entnam
     if (ifsa->fsunlink (name) >= 0) return true;
 
     do {
-        ndel = 0;
+        ndel = false;
         dir = ifsa->fsopendir (name);
         if (dir != NULL) {
             while ((ent = ifsa->fsreaddir (dir)) != NULL) {

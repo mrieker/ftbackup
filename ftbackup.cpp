@@ -35,7 +35,7 @@ static int cmd_restore (int argc, char **argv);
 static int cmd_version (int argc, char **argv);
 static int cmd_xorvfy (int argc, char **argv);
 
-static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **argv, int i, bool enc);
+static int decodecipherargs (CryptoPP::BlockCipher **cripter, CryptoPP::HashTransformation **hasher, int argc, char **argv, int i, bool enc);
 static CryptoPP::BlockCipher *getciphercontext (char const *name, bool enc);
 static CryptoPP::HashTransformation *gethashercontext (char const *name);
 static void usagecipherargs (char const *decenc);
@@ -177,7 +177,7 @@ static int cmd_backup (int argc, char **argv)
                 continue;
             }
             if (strcasecmp (argv[i], "-encrypt") == 0) {
-                i = decodecipherargs (&ftbwriter.cripter, argc, argv, i, true);
+                i = decodecipherargs (&ftbwriter.cripter, &ftbwriter.hasher, argc, argv, i, true);
                 if (i < 0) goto usage;
                 continue;
             }
@@ -485,7 +485,7 @@ static int cmd_compare (int argc, char **argv)
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
             if (strcasecmp (argv[i], "-decrypt") == 0) {
-                i = decodecipherargs (&ftbcomparer.cripter, argc, argv, i, false);
+                i = decodecipherargs (&ftbcomparer.cripter, &ftbcomparer.hasher, argc, argv, i, false);
                 if (i < 0) goto usage;
                 continue;
             }
@@ -1072,7 +1072,7 @@ static int cmd_list (int argc, char **argv)
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
             if (strcasecmp (argv[i], "-decrypt") == 0) {
-                i = decodecipherargs (&ftblister.cripter, argc, argv, i, false);
+                i = decodecipherargs (&ftblister.cripter, &ftblister.hasher, argc, argv, i, false);
                 if (i < 0) goto usage;
                 continue;
             }
@@ -1133,7 +1133,7 @@ static int cmd_restore (int argc, char **argv)
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
             if (strcasecmp (argv[i], "-decrypt") == 0) {
-                i = decodecipherargs (&ftbrestorer.cripter, argc, argv, i, false);
+                i = decodecipherargs (&ftbrestorer.cripter, &ftbrestorer.hasher, argc, argv, i, false);
                 if (i < 0) goto usage;
                 continue;
             }
@@ -1225,16 +1225,19 @@ static int cmd_xorvfy (int argc, char **argv)
     Block baseblock, *block, *xorblk, **xorblocks;
     bool ok;
     CryptoPP::BlockCipher *cripter;
+    CryptoPP::HashTransformation *hasher;
     int fd, i, rc;
-    uint32_t bs, lastseqno, lastxorno, xorgn;
+    uint32_t bs, hashsize, lastseqno, lastxorno, xorgn;
     uint64_t rdpos;
     uint8_t *xorcounts;
 
-    name = NULL;
+    cripter = NULL;
+    hasher  = NULL;
+    name    = NULL;
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
             if (strcasecmp (argv[i], "-decrypt") == 0) {
-                i = decodecipherargs (&cripter, argc, argv, i, false);
+                i = decodecipherargs (&cripter, &hasher, argc, argv, i, false);
                 if (i < 0) goto usage;
                 continue;
             }
@@ -1263,15 +1266,16 @@ static int cmd_xorvfy (int argc, char **argv)
         return EX_SSIO;
     }
 
-    FTBReader::decrypt_block (cripter, block, MINBLOCKSIZE);
+    FTBReader::decrypt_block (cripter, hasher, block, MINBLOCKSIZE);
 
     baseblock = *block;
 
+    hashsize = (hasher == NULL) ? 0 : hasher->DigestSize ();
     bs = 1 << baseblock.l2bs;
 
     block = (Block *) malloc (bs);
     xorblocks = (Block **) malloc (baseblock.xorgc * sizeof *xorblocks);
-    for (xorgn = 0; xorgn < baseblock.xorgc; xorgn ++) xorblocks[xorgn] = (Block *) calloc (1, bs);
+    for (xorgn = 0; xorgn < baseblock.xorgc; xorgn ++) xorblocks[xorgn] = (Block *) calloc (1, bs - hashsize);
     xorcounts = (uint8_t *) calloc (baseblock.xorgc, sizeof *xorcounts);
 
     lastseqno = 0;
@@ -1280,7 +1284,10 @@ static int cmd_xorvfy (int argc, char **argv)
     rdpos = 0;
 
     while (((rc = pread (fd, block, bs, rdpos)) >= 0) && ((uint32_t) rc == bs)) {
-        FTBReader::decrypt_block (cripter, block, bs);
+        if (!FTBReader::decrypt_block (cripter, hasher, block, bs)) {
+            fprintf (stderr, "%llu: block digest not valid\n", rdpos);
+            goto done;
+        }
         if (memcmp (block->magic, BLOCK_MAGIC, 8) != 0) {
             fprintf (stderr, "%llu: bad block magic\n", rdpos);
             goto done;
@@ -1299,7 +1306,7 @@ static int cmd_xorvfy (int argc, char **argv)
             xorgn  = (block->seqno - 1) % baseblock.xorgc;
             xorblk = xorblocks[xorgn];
             //if (xorgn == 0) fprintf (stderr, "xorvfy*: seqno %6u data %02X xor before %02X\n", block->seqno, block->data[0], xorblk->data[0]);
-            FTBackup::xorblockdata (xorblk, block, bs);
+            FTBackup::xorblockdata (xorblk, block, bs - hashsize);
             //if (xorgn == 0) fprintf (stderr, "xorvfy*:                      xor  after %02X\n", xorblk->data[0]);
             xorcounts[xorgn] ++;
         } else {
@@ -1314,16 +1321,16 @@ static int cmd_xorvfy (int argc, char **argv)
                 goto done;
             }
             //if (xorgn == 0) fprintf (stderr, "xorvfy*: xorno %6u data %02X xor before %02X\n", block->xorno, block->data[0], xorblk->data[0]);
-            FTBackup::xorblockdata (xorblk, block, bs);
+            FTBackup::xorblockdata (xorblk, block, bs - hashsize);
             //if (xorgn == 0) fprintf (stderr, "xorvfy*:                      xor  after %02X\n", xorblk->data[0]);
-            for (rc = 0; rc < (uint8_t *)block + bs - block->data; rc ++) {
+            for (rc = 0; rc < (uint8_t *)block + bs - hashsize - block->data; rc ++) {
                 if (xorblk->data[rc] != 0) {
                     fprintf (stderr, "%llu: bad xor data at xorno %u[%d]\n", rdpos, block->xorno, rc);
                     goto done;
                 }
             }
 
-            memset (xorblk, 0, bs);
+            memset (xorblk, 0, bs - hashsize);
             xorcounts[xorgn] = 0;
         }
 
@@ -1355,6 +1362,8 @@ done:
     free (block);
     free (xorblocks);
     free (xorcounts);
+    if (cripter != NULL) delete cripter;
+    if (hasher  != NULL) delete hasher;
 
     return ok ? EX_OK : EX_SSIO;
 
@@ -1367,15 +1376,18 @@ usage:
 
 FTBackup::FTBackup ()
 {
-    l2bs    = __builtin_ctz (DEFBLOCKSIZE);
-    xorgc   = DEFXORGC;
-    xorsc   = DEFXORSC;
-    cripter = NULL;
+    hashsize = 0;
+    l2bs     = __builtin_ctz (DEFBLOCKSIZE);
+    xorgc    = DEFXORGC;
+    xorsc    = DEFXORSC;
+    cripter  = NULL;
+    hasher   = NULL;
 }
 
 FTBackup::~FTBackup ()
 {
     if (cripter != NULL) delete cripter;
+    if (hasher  != NULL) delete hasher;
 }
 
 /**
@@ -1430,7 +1442,7 @@ bool FTBackup::blockisvalid (Block *block)
     }
 
     if (block->hdroffs != 0) {
-        bs = 1 << l2bs;
+        bs = (1 << l2bs) - hashsize;
         if (block->hdroffs < (ulong_t)block->data - (ulong_t)block) goto bbho;
         if (block->hdroffs >= bs) goto bbho;
         hdr = (Header *)((ulong_t)block + block->hdroffs);
@@ -1459,7 +1471,7 @@ bool FTBackup::blockbaseisvalid (Block *block)
         return false;
     }
 
-    bs = 1 << l2bs;
+    bs = (1 << l2bs) - hashsize;
     chksum = checksumdata (block, bs);
     if (chksum != 0) {
         fprintf (stderr, "ftbackup: bad block checksum\n");
@@ -1525,14 +1537,13 @@ uint32_t FTBackup::checksumdata (void const *src, uint32_t nby)
 }
 
 /**
- * @brief Decode command-line encrypt/decrypt arguments and fill in 'cripter'.
+ * @brief Decode command-line encrypt/decrypt arguments and fill in 'cripter' & 'hasher'.
  *          -{de,en}crypt <blockciphername> <passwordhasher> <password>
  */
-static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **argv, int i, bool enc)
+static int decodecipherargs (CryptoPP::BlockCipher **cripter, CryptoPP::HashTransformation **hasher, int argc, char **argv, int i, bool enc)
 {
     byte *digest;
     char keybuff[4096], keybufr[4096], *keyline, *p;
-    CryptoPP::HashTransformation *hasher;
     FILE *keyfile;
     size_t defkeylen;
 
@@ -1548,8 +1559,8 @@ static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **a
      * Get password hasher algorithm.
      */
     if (++ i >= argc) return -1;
-    hasher = gethashercontext (argv[i]);
-    if (hasher == NULL) return -1;
+    *hasher = gethashercontext (argv[i]);
+    if (*hasher == NULL) return -1;
 
     /*
      * Get key, either directly from arg list or from a file.
@@ -1590,11 +1601,9 @@ static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **a
      * Set up hash of the key string as the block cipher key.
      */
     digest = (byte *) alloca (defkeylen);
-    hasher->Update ((byte const *) keyline, (size_t) strlen (keyline));
-    hasher->TruncatedFinal (digest, defkeylen);
+    (*hasher)->Update ((byte const *) keyline, (size_t) strlen (keyline));
+    (*hasher)->TruncatedFinal (digest, defkeylen);
     (*cripter)->SetKey (digest, defkeylen, CryptoPP::g_nullNameValuePairs);
-
-    delete hasher;
 
     return i;
 }
