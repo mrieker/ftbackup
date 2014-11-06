@@ -24,6 +24,7 @@ static bool diff_file (char const *path1, char const *path2);
 static char *formatime (char *buff, time_t time);
 static bool diff_regular (char const *path1, char const *path2);
 static bool diff_directory (char const *path1, char const *path2);
+static bool containsskipdir (int nents, struct dirent **names);
 static bool issocket (char const *path, char const *file);
 static bool ismountpointoremptydir (char const *name);
 static bool diff_symlink (char const *path1, char const *path2);
@@ -38,7 +39,7 @@ static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **a
 static CryptoPP::BlockCipher *getciphercontext (char const *name, bool enc);
 static CryptoPP::HashTransformation *gethashercontext (char const *name);
 static void usagecipherargs (char const *decenc);
-static bool readpasswd (char *pwbuff, size_t pwsize);
+static bool readpasswd (char const *prompt, char *pwbuff, size_t pwsize);
 
 /**
  * @brief A spot for IFSAccess typeinfo and vtable.
@@ -703,7 +704,7 @@ int CompFSAccess::fsmknod (char const *name, mode_t mode, dev_t rdev)
 }
 
 /**
- * @brief Compare two directories.
+ * @brief Compare two directory trees.
  */
 static int cmd_diff (int argc, char **argv)
 {
@@ -714,7 +715,7 @@ static int cmd_diff (int argc, char **argv)
     dir1 = argv[1];
     dir2 = argv[2];
     rc = diff_file (dir1, dir2) ? EX_SSIO : EX_OK;
-    printf ("\n");
+    if (rc != EX_OK) printf ("\n");
     return rc;
 
 usage:
@@ -846,20 +847,23 @@ static bool diff_directory (char const *path1, char const *path2)
     int cmp, i, j, len1, len2, longest, nents1, nents2;
     struct dirent **names1, **names2;
 
+    err = false;
+
     nents1 = scandir (path1, &names1, NULL, alphasort);
     if (nents1 < 0) {
         printf ("\ndiff directory scandir %s error: %s\n", path1, mystrerr (errno));
         return true;
     }
 
-    err = true;
-
     nents2 = scandir (path2, &names2, NULL, alphasort);
     if (nents2 < 0) {
         printf ("\ndiff directory scandir %s error: %s\n", path2, mystrerr (errno));
         names2 = NULL;
+        err    = true;
         goto done;
     }
+
+    if (containsskipdir (nents1, names1) && containsskipdir (nents2, names2)) goto done;
 
     longest = 0;
     for (i = 0; i < nents1; i ++) {
@@ -879,7 +883,6 @@ static bool diff_directory (char const *path1, char const *path2)
     if ((len2 > 0) && (name2[len2-1] != '/')) name2[len2++] = '/';
 
     cmp = 0;
-    err = false;
     for (i = j = 0; (i < nents1) || (j < nents2);) {
         file1 = (i < nents1) ? names1[i]->d_name : NULL;
         file2 = (j < nents2) ? names2[j]->d_name : NULL;
@@ -940,6 +943,16 @@ done:
     if (names1 != NULL) free (names1);
     if (names2 != NULL) free (names2);
     return err;
+}
+
+static bool containsskipdir (int nents, struct dirent **names)
+{
+    int i;
+
+    for (i = 0; i < nents; i ++) {
+        if (strcmp (names[i]->d_name, "~SKIPDIR.FTB") == 0) return true;
+    }
+    return false;
 }
 
 static bool issocket (char const *path, char const *file)
@@ -1518,7 +1531,7 @@ uint32_t FTBackup::checksumdata (void const *src, uint32_t nby)
 static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **argv, int i, bool enc)
 {
     byte *digest;
-    char keybuff[4096], *keyline, *p;
+    char keybuff[4096], keybufr[4096], *keyline, *p;
     CryptoPP::HashTransformation *hasher;
     FILE *keyfile;
     size_t defkeylen;
@@ -1544,7 +1557,13 @@ static int decodecipherargs (CryptoPP::BlockCipher **cripter, int argc, char **a
     if (++ i >= argc) return -1;
     keyline = argv[i];
     if (strcmp (keyline, "-") == 0) {
-        if (!readpasswd (keybuff, sizeof keybuff)) return -1;
+        while (true) {
+            if (!readpasswd ("password: ", keybuff, sizeof keybuff)) return -1;
+            if (!enc) break;
+            if (!readpasswd ("pw again: ", keybufr, sizeof keybufr)) return -1;
+            if (strcmp (keybufr, keybuff) == 0) break;
+            fprintf (stderr, "ftbackup: passwords don't match\n");
+        }
         keyline = keybuff;
     } else if (keyline[0] == '@') {
         keyfile = fopen (++ keyline, "r");
@@ -1690,9 +1709,9 @@ static void usagecipherargs (char const *decenc)
     fprintf (stderr, "                                   else : literal string\n");
 }
 
-static bool readpasswd (char *pwbuff, size_t pwsize)
+static bool readpasswd (char const *prompt, char *pwbuff, size_t pwsize)
 {
-    int rc, ttyfd;
+    int promptlen, rc, ttyfd;
     struct termios nflags, oflags;
 
     ttyfd = open ("/dev/tty", O_RDWR | O_NOCTTY);
@@ -1715,9 +1734,10 @@ static bool readpasswd (char *pwbuff, size_t pwsize)
         goto err2;
     }
 
+    promptlen = strlen (prompt);
     do {
-        rc = write (ttyfd, "password: ", 10);
-        if (rc < 10) {
+        rc = write (ttyfd, prompt, promptlen);
+        if (rc < promptlen) {
             if (rc >= 0) errno = EPIPE;
             fprintf (stderr, "write(/dev/tty) error: %s\n", mystrerr (errno));
             goto err1;
