@@ -44,7 +44,6 @@ private:
     std::string *name;  // construct: set to NULL; destruct: deleted if non-NULL
 
     friend class JSonList;
-    friend class JSonListIterator;
     friend class JSonQueue;
     friend class JSonStack;
     friend class JSonStruc;
