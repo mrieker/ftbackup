@@ -1404,9 +1404,24 @@ void *FTBWriter::encr_thread ()
 
     cbs = cripter->BlockSize ();
 
+    /*
+     * Make sure the 'i = 4' in the for loops below will work.
+     *
+     *  +-----------------------+
+     *  |  16 bytes of magic    |
+     *  |  ...and block number  |
+     *  +-----------------------+
+     *  |  16 bytes of nonce    |
+     *  |                       |
+     *  +-----------------------+
+     *  |  data to encrypt ...  | i = 4: quadword[4]
+     */
     if (sizeof block->nonce != 16) abort ();
     if (offsetof (Block, nonce) != 16) abort ();
 
+    /*
+     * Get source of random numbers for the nonces.
+     */
     noncefile = fopen ("/dev/urandom", "r");
     if (noncefile == NULL) {
         fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", mystrerr (errno));

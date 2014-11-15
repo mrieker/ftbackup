@@ -1608,6 +1608,7 @@ static int decodecipherargs (CryptoPP::BlockCipher **cripter, CryptoPP::HashTran
     return i;
 }
 
+#include "cryptopp562/aes.h"
 #include "cryptopp562/blowfish.h"
 #include "cryptopp562/camellia.h"
 #include "cryptopp562/cast.h"
@@ -1629,6 +1630,7 @@ static int decodecipherargs (CryptoPP::BlockCipher **cripter, CryptoPP::HashTran
 #include "cryptopp562/twofish.h"
 
 #define CIPHLIST \
+    _CIPHOP (AES)       \
     _CIPHOP (Blowfish)  \
     _CIPHOP (Camellia)  \
     _CIPHOP (CAST128)   \
