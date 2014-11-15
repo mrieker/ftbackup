@@ -316,7 +316,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                         xattrsvaluptr = xattrsnameend = xattrsnameptr + xattrslistlen;
                         while (xattrsnameptr < xattrsnameend) {
                             xattrsvalulen = extpackeduint32 (&xattrsvaluptr);
-                            if (lsetxattr (dstname, xattrsnameptr, xattrsvaluptr, xattrsvalulen, 0) < 0) {
+                            if (tfs->fslsetxattr (dstname, xattrsnameptr, xattrsvaluptr, xattrsvalulen, 0) < 0) {
                                 fprintf (stderr, "ftbackup: lsetxattr(%s,%s) error: %s\n",
                                         dstname, xattrsnameptr, strerror (errno));
                                 ok = false;

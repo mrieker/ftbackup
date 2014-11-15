@@ -22,6 +22,8 @@ static int cmd_compare (int argc, char **argv);
 static int cmd_diff (int argc, char **argv);
 static bool diff_file (char const *path1, char const *path2);
 static char *formatime (char *buff, time_t time);
+static bool readxattrnamelist (char const *path, int *xlp, char **xnp);
+static void sortxattrnamelist (char *xn, int xl);
 static bool diff_regular (char const *path1, char const *path2);
 static bool diff_directory (char const *path1, char const *path2);
 static bool containsskipdir (int nents, struct dirent **names);
@@ -81,6 +83,9 @@ struct FullFSAccess : IFSAccess {
     virtual DIR *fsopendir (char const *name) { return opendir (name); }
     virtual struct dirent *fsreaddir (DIR *dir) { return readdir (dir); }
     virtual void fsclosedir (DIR *dir) { closedir (dir); }
+    virtual int fsllistxattr (char const *path, char *list, int size) { return llistxattr (path, list, size); }
+    virtual int fslgetxattr (char const *path, char const *name, void *value, int size) { return lgetxattr (path, name, value, size); }
+    virtual int fslsetxattr (char const *path, char const *name, void const *value, int size, int flags) { return lsetxattr (path, name, value, size, flags); }
 };
 
 FullFSAccess::FullFSAccess () { }
@@ -117,6 +122,9 @@ struct NullFSAccess : IFSAccess {
     virtual DIR *fsopendir (char const *name) { errno = ENOSYS; return NULL; }
     virtual struct dirent *fsreaddir (DIR *dir) { errno = ENOSYS; return NULL; }
     virtual void fsclosedir (DIR *dir) { }
+    virtual int fsllistxattr (char const *path, char *list, int size) { errno = ENOSYS; return -1; }
+    virtual int fslgetxattr (char const *path, char const *name, void *value, int size) { errno = ENOSYS; return -1; }
+    virtual int fslsetxattr (char const *path, char const *name, void const *value, int size, int flags) { errno = ENOSYS; return -1; }
 };
 
 NullFSAccess::NullFSAccess () { }
@@ -470,6 +478,9 @@ struct CompFSAccess : IFSAccess {
     virtual DIR *fsopendir (char const *name) { errno = ENOSYS; return NULL; }
     virtual struct dirent *fsreaddir (DIR *dir) { errno = ENOSYS; return NULL; }
     virtual void fsclosedir (DIR *dir) { }
+    virtual int fsllistxattr (char const *path, char *list, int size) { errno = ENOSYS; return -1; }
+    virtual int fslgetxattr (char const *path, char const *name, void *value, int size) { errno = ENOSYS; return -1; }
+    virtual int fslsetxattr (char const *path, char const *name, void const *value, int size, int flags);
 };
 
 static int cmd_compare (int argc, char **argv)
@@ -702,6 +713,20 @@ int CompFSAccess::fsmknod (char const *name, mode_t mode, dev_t rdev)
     }
     return rc;
 }
+
+// instead of writing an extended attribute, make sure it exists and value is the same
+int CompFSAccess::fslsetxattr (char const *path, char const *name, void const *value, int size, int flags)
+{
+    char buf[size];
+    int rc = lgetxattr (path, name, buf, size);
+    if (rc >= 0) {
+        if ((rc != size) || (memcmp (buf, value, size) != 0)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
 
 /**
  * @brief Compare two directory trees.
@@ -726,10 +751,13 @@ usage:
 static bool diff_file (char const *path1, char const *path2)
 {
     bool err;
-    char time1[24], time2[24];
-    int len, rc1, rc2;
+    char time1[24], time2[24], *xb1, *xb2, *xe1, *xe2, *xm1, *xm2, *xn1, *xn2;
+    int cmp, len, rc1, rc2, xa1, xa2, xl1, xl2;
     struct stat stat1, stat2;
 
+    /*
+     * Get stats of both files.
+     */
     rc1 = lstat (path1, &stat1);
     if (rc1 < 0) {
         printf ("\ndiff file lstat %s error: %s\n", path1, mystrerr (errno));
@@ -741,6 +769,9 @@ static bool diff_file (char const *path1, char const *path2)
         return true;
     }
 
+    /*
+     * Report differences in mode and/or mtimes.
+     */
     err = false;
     len = (strlen (path1) > strlen (path2)) ? strlen (path1) : strlen (path2);
 
@@ -760,6 +791,100 @@ static bool diff_file (char const *path1, char const *path2)
         err = true;
     }
 
+    /*
+     * Get sorted extended attribute name lists for both files.
+     */
+    err |= readxattrnamelist (path1, &xl1, &xn1);
+    err |= readxattrnamelist (path2, &xl2, &xn2);
+    xm1  = xn1;
+    xm2  = xn2;
+
+    /*
+     * Compare the extended attributes.
+     */
+    xa1 = xa2 = 0;
+    xb1 = xb2 = NULL;
+    xe1 = xn1 + xl1;
+    xe2 = xn2 + xl2;
+    while ((xn1 < xe1) || (xn2 < xe2)) {
+
+        /*
+         * Compare next attribute names from path1 and path2.
+         *   cmp = -1: xattr name from path1 .lt. xattr name from path2
+         *          1: xattr name from path1 .gt. xattr name from path2
+         *          0: xattr names are equal
+         */
+        if ((xn1 < xe1) && (xn2 < xe2)) cmp = strcmp (xn1, xn2);
+                    else if (xn1 < xe1) cmp = -1;
+                                   else cmp =  1;
+        if (cmp < 0) {
+            printf ("\ndiff file %s missing xattr %s\n", path2, xn1);
+            err = true;
+            xn1 += strlen (xn1) + 1;
+            continue;
+        }
+        if (cmp > 0) {
+            printf ("\ndiff file %s missing xattr %s\n", path1, xn2);
+            err = true;
+            xn2 += strlen (xn2) + 1;
+            continue;
+        }
+
+        /*
+         * Name present in both files, compare the xattr values.
+         */
+        xl1 = lgetxattr (path1, xn1, NULL, 0);
+        if (xl1 < 0) {
+            printf ("\ndiff file lgetxattr(%s,%s) error: %s\n", path1, xn1, strerror (errno));
+            err = true;
+            goto nextxattr;
+        }
+        xl2 = lgetxattr (path2, xn2, NULL, 0);
+        if (xl2 < 0) {
+            printf ("\ndiff file lgetxattr(%s,%s) error: %s\n", path2, xn2, strerror (errno));
+            err = true;
+            goto nextxattr;
+        }
+        if (xa1 < xl1) {
+            xa1 = xl1;
+            xb1 = (char *) realloc (xb1, xa1);
+            if (xb1 == NULL) NOMEM ();
+        }
+        if (xa2 < xl2) {
+            xa2 = xl2;
+            xb2 = (char *) realloc (xb2, xa2);
+            if (xb2 == NULL) NOMEM ();
+        }
+        xl1 = lgetxattr (path1, xn1, xb1, xa1);
+        if (xl1 < 0) {
+            printf ("\ndiff file lgetxattr(%s,%s) error: %s\n", path1, xn1, strerror (errno));
+            err = true;
+            goto nextxattr;
+        }
+        xl2 = lgetxattr (path2, xn2, xb2, xa2);
+        if (xl2 < 0) {
+            printf ("\ndiff file lgetxattr(%s,%s) error: %s\n", path2, xn2, strerror (errno));
+            err = true;
+            goto nextxattr;
+        }
+        if ((xl1 != xl2) || (memcmp (xb1, xb2, xl2) != 0)) {
+            printf ("\ndiff file xattr %s mismatch\n  %*s  %*.*s\n  %*s  %*.*s\n",
+                    xn1, len, path1, xl1, xl1, xb1, len, path2, xl2, xl2, xb2);
+            err = true;
+        }
+    nextxattr:
+        xn1 += strlen (xn1) + 1;
+        xn2 += strlen (xn2) + 1;
+    }
+
+    if (xm1 != NULL) free (xm1);
+    if (xm2 != NULL) free (xm2);
+    if (xb1 != NULL) free (xb1);
+    if (xb2 != NULL) free (xb2);
+
+    /*
+     * Compare file contents.
+     */
     if (S_ISREG  (stat1.st_mode)) return err | diff_regular   (path1, path2);
     if (S_ISDIR  (stat1.st_mode)) return err | diff_directory (path1, path2);
     if (S_ISLNK  (stat1.st_mode)) return err | diff_symlink   (path1, path2);
@@ -773,6 +898,80 @@ static char *formatime (char *buff, time_t time)
     sprintf (buff, "%04d-%02d-%02d %02d:%02d:%02d",
             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     return buff;
+}
+
+/**
+ * @brief Read a file's extended attribute name list.
+ * @param path = file's path name
+ * @param xlp  = where to return length of extended attributes name list
+ * @param xnp  = where to return malloc'd extended attributes name list
+ * @returns true: successful
+ *         false: failed, error message already printed
+ */
+static bool readxattrnamelist (char const *path, int *xlp, char **xnp)
+{
+    bool err;
+
+    err  = false;
+    *xnp = NULL;
+    *xlp = llistxattr (path, NULL, 0);
+    if (*xlp < 0) {
+        if (errno != ENOTSUP) {
+            printf ("\ndiff file llistxattr %s error: %s\n", path, mystrerr (errno));
+            err = true;
+        }
+        *xlp = 0;
+    } else if (*xlp > 0) {
+        *xnp = (char *) malloc (*xlp);
+        if (*xnp == NULL) NOMEM ();
+        *xlp = llistxattr (path, *xnp, *xlp);
+        if (*xlp < 0) {
+            printf ("\ndiff file llistxattr %s error: %s\n", path, mystrerr (errno));
+            *xlp = 0;
+            err  = true;
+        } else if (*xlp > 0) {
+            if ((*xnp)[*xlp-1] != 0) {
+                printf ("\ndiff file llistxattr %s badly formatted names\n", path);
+                *xlp = 0;
+                err  = true;
+            } else {
+                sortxattrnamelist (*xnp, *xlp);
+            }
+        }
+    }
+    return err;
+}
+
+/**
+ * @brief Sort extended attribute name list.
+ * @param xn = extended attribute name list (series of null terminated strings)
+ * @param xl = length of xn (total length of all null terminated strings including the nulls)
+ * @returns with strings in xn sorted
+ */
+static void sortxattrnamelist (char *xn, int xl)
+{
+    bool swapped;
+    char xt[xl];
+    int i, j, k;
+
+    do {
+        swapped = false;
+        i = 0;
+        while (i < xl) {
+            j = strlen (xn + i) + 1 + i;            // point to beginning of next name in list
+            if (j >= xl) break;                     // stop if there isn't a next name
+            if (strcmp (xn + i, xn + j) > 0) {      // see if the i'th name is .gt. the j'th name
+                k = strlen (xn + j) + 1 + j;        // point past the j'th name
+                memcpy (xt, xn + i, j - i);         // copy i'th name to temp
+                memmove (xn + i, xn + j, k - j);    // shift the j'th name up over the i'th name
+                memcpy (xn + i + k - j, xt, j - i); // copy i'th name just after where j'th is
+                i += k - j;                         // point to where the i'th name is now
+                swapped = true;                     // remember that we have to scan again
+            } else {
+                i = j;                              // point to next name in list
+            }
+        }
+    } while (swapped);
 }
 
 static bool diff_regular (char const *path1, char const *path2)

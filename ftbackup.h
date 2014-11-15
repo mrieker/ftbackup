@@ -130,6 +130,9 @@ struct IFSAccess {
     virtual DIR *fsopendir (char const *name) =0;
     virtual struct dirent *fsreaddir (DIR *dir) =0;
     virtual void fsclosedir (DIR *dir) =0;
+    virtual int fsllistxattr (char const *path, char *list, int size) =0;
+    virtual int fslgetxattr (char const *path, char const *name, void *value, int size) =0;
+    virtual int fslsetxattr (char const *path, char const *name, void const *value, int size, int flags) =0;
 };
 
 #define MYEDATACMP 632396223

@@ -370,7 +370,7 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
     /*
      * Get extended attributes length, if any.
      */
-    rc = llistxattr (path, NULL, 0);
+    rc = tfs->fsllistxattr (path, NULL, 0);
     if (rc < 0) {
         if (errno != ENOTSUP) {
             fprintf (stderr, "ftbackup: llistxattr(%s) error: %s\n", path, strerror (errno));
@@ -383,14 +383,14 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
     xattrslistbuf = NULL;
     if (xattrslistlen > 0) {
         xattrslistbuf = (char *) alloca (xattrslistlen);
-        rc = llistxattr (path, xattrslistbuf, xattrslistlen);
+        rc = tfs->fsllistxattr (path, xattrslistbuf, xattrslistlen);
         if (rc < 0) {
             fprintf (stderr, "ftbackup: llistxattr(%s) error: %s\n", path, strerror (errno));
             return false;
         }
         xattrslistlen = rc;
         for (i = 0; i < xattrslistlen; i += ++ j) {
-            rc = lgetxattr (path, xattrslistbuf + i, NULL, 0);
+            rc = tfs->fslgetxattr (path, xattrslistbuf + i, NULL, 0);
             if (rc < 0) {
                 fprintf (stderr, "ftbackup: lgetxattr(%s,%s) error: %s\n", path, xattrslistbuf + i, strerror (errno));
                 return false;
@@ -434,7 +434,7 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
         memcpy (hdr->name + pathlen, xattrslistbuf, xattrslistlen);
         pathlen += xattrslistlen;
         for (i = 0; i < xattrslistlen; i += ++ j) {
-            rc = lgetxattr (path, xattrslistbuf + i, hdr->name + pathlen + 5, hdrnamealloc - pathlen - 5);
+            rc = tfs->fslgetxattr (path, xattrslistbuf + i, hdr->name + pathlen + 5, hdrnamealloc - pathlen - 5);
             if (rc < 0) {
                 fprintf (stderr, "ftbackup: lgetxattr(%s,%s) error: %s\n", path, xattrslistbuf + i, strerror (errno));
                 free (hdr);
