@@ -17,6 +17,8 @@
 #include <unistd.h>
 #include <zlib.h>
 
+#include <attr/xattr.h>
+
 #include "cryptopp562/cryptlib.h"
 
 #define PAGESIZE (4096U)
@@ -38,6 +40,7 @@
 #define HEADER_MAGIC "ftbheder"
 
 #define HFL_HDLINK 0x01  // regular file is an hardlink
+#define HFL_XATTRS 0x02  // xattrs follow name
 
 #define INTERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error %d\n", err); abort (); } while (0)
 #define NANOTIME(tv) ((tv).tv_sec * 1000000000ULL + (tv).tv_nsec)
@@ -75,9 +78,9 @@ struct Header {
     uint32_t    stmode;     // protection and type
     uint32_t    ownuid;     // owner UID
     uint32_t    owngid;     // owner GID
-    uint16_t    nameln;     // name length (incl null)
-    uint16_t    flags;      // flag bits
-    char        name[0];    // file name (incl null)
+    uint32_t    nameln;     // name and xattr length (incl null)
+    uint8_t     flags;      // flag bits
+    char        name[0];    // file name (incl null) and xattrs
 };
 
 struct FTBackup {

@@ -2,6 +2,7 @@
 #include "ftbackup.h"
 #include "ftbwriter.h"
 
+static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val);
 static void checkpointheader (FILE *file, Header const *header);
 static void writejsonstring (FILE *file, char const *str);
 static void reloadheader (Header *header, JSon *val);
@@ -343,9 +344,12 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
  */
 bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
 {
+    bool ok;
+    char *xattrslistbuf;
     Header *hdr;
-    int pathlen;
+    int rc;
     struct stat statbuf;
+    uint32_t hdrnamealloc, i, j, pathlen, xattrslistlen, xattrsvalslen;
 
     /*
      * See what type of thing we are dealing with.
@@ -364,6 +368,40 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
     }
 
     /*
+     * Get extended attributes length, if any.
+     */
+    rc = llistxattr (path, NULL, 0);
+    if (rc < 0) {
+        if (errno != ENOTSUP) {
+            fprintf (stderr, "ftbackup: llistxattr(%s) error: %s\n", path, strerror (errno));
+            return false;
+        }
+        rc = 0;
+    }
+    xattrslistlen = rc;
+    xattrsvalslen = 0;
+    xattrslistbuf = NULL;
+    if (xattrslistlen > 0) {
+        xattrslistbuf = (char *) alloca (xattrslistlen);
+        rc = llistxattr (path, xattrslistbuf, xattrslistlen);
+        if (rc < 0) {
+            fprintf (stderr, "ftbackup: llistxattr(%s) error: %s\n", path, strerror (errno));
+            return false;
+        }
+        xattrslistlen = rc;
+        for (i = 0; i < xattrslistlen; i += ++ j) {
+            rc = lgetxattr (path, xattrslistbuf + i, NULL, 0);
+            if (rc < 0) {
+                fprintf (stderr, "ftbackup: lgetxattr(%s,%s) error: %s\n", path, xattrslistbuf + i, strerror (errno));
+                return false;
+            }
+            xattrsvalslen += rc + 5;
+            j = strlen (xattrslistbuf + i);
+        }
+        xattrslistlen += 5;
+    }
+
+    /*
      * No trailing '/' on path unless the path is only a '/'
      * so we have a specific convention to follow.
      */
@@ -373,7 +411,9 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
     /*
      * Set up file header with the file's name and attributes.
      */
-    hdr = (Header *) alloca (pathlen + 1 + sizeof *hdr);
+    hdrnamealloc = pathlen + 1 + xattrslistlen + xattrsvalslen;
+    hdr = (Header *) malloc (hdrnamealloc + sizeof *hdr);
+    if (hdr == NULL) NOMEM ();
     memset (hdr, 0, sizeof *hdr);
 
     hdr->mtimns = NANOTIME (statbuf.st_mtim);
@@ -383,26 +423,60 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
     hdr->stmode = statbuf.st_mode;
     hdr->ownuid = statbuf.st_uid;
     hdr->owngid = statbuf.st_gid;
-    hdr->nameln = pathlen + 1;
 
     memcpy (hdr->name, path, pathlen);
-    hdr->name[pathlen] = 0;
+    hdr->name[pathlen++] = 0;
+
+    if (xattrslistlen > 0) {
+        hdr->flags = HFL_XATTRS;
+        xattrslistlen -= 5;
+        pathlen = inspackeduint32 (hdr->name, pathlen, xattrslistlen);
+        memcpy (hdr->name + pathlen, xattrslistbuf, xattrslistlen);
+        pathlen += xattrslistlen;
+        for (i = 0; i < xattrslistlen; i += ++ j) {
+            rc = lgetxattr (path, xattrslistbuf + i, hdr->name + pathlen + 5, hdrnamealloc - pathlen - 5);
+            if (rc < 0) {
+                fprintf (stderr, "ftbackup: lgetxattr(%s,%s) error: %s\n", path, xattrslistbuf + i, strerror (errno));
+                free (hdr);
+                return false;
+            }
+            j = inspackeduint32 (hdr->name, pathlen, (uint32_t) rc);
+            memmove (hdr->name + j, hdr->name + pathlen + 5, rc);
+            pathlen = j + rc;
+            j = strlen (xattrslistbuf + i);
+        }
+    }
+
+    hdr->nameln = pathlen;
 
     /*
      * Mountpoints get an empty directory instead of descending into the filesystem.
      */
     if ((dirstat != NULL) && (statbuf.st_dev != dirstat->st_dev)) {
         fprintf (stderr, "ftbackup: skipping mountpoint %s\n", hdr->name);
-        return write_mountpoint (hdr);
+        ok = write_mountpoint (hdr);
     }
 
     /*
-     * Write it out to saveset based on what its type is.
+     * Otherwise, write it out to saveset based on what its type is.
      */
-    if (S_ISREG (statbuf.st_mode)) return write_regular (hdr, &statbuf);
-    if (S_ISDIR (statbuf.st_mode)) return write_directory (hdr, &statbuf);
-    if (S_ISLNK (statbuf.st_mode)) return write_symlink (hdr);
-    return write_special (hdr, statbuf.st_rdev);
+    else if (S_ISREG (statbuf.st_mode)) ok = write_regular (hdr, &statbuf);
+    else if (S_ISDIR (statbuf.st_mode)) ok = write_directory (hdr, &statbuf);
+    else if (S_ISLNK (statbuf.st_mode)) ok = write_symlink (hdr);
+                                   else ok = write_special (hdr, statbuf.st_rdev);
+
+    free (hdr);
+    return ok;
+}
+
+static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val)
+{
+    while (val > 0x7F) {
+        buf[idx++] = val | 0x80;
+        val >>= 7;
+    }
+    buf[idx++] = val;
+    return idx;
 }
 
 /**
