@@ -104,9 +104,9 @@ FTBReader::~FTBReader ()
 int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char const *dstprefix)
 {
     Block *rblock;
-    bool needhdr, ok, setimes, thisok;
+    bool fileopen, needhdr, ok, printnextgoodfile, setimes, thisok;
     char const *xattrsnameend, *xattrsnameptr, *xattrsvaluptr;
-    char *dstname, *dstnamebuf, *p, *srcprefixnul;
+    char *dstname, *dstnamebuf, *lastfilenamefinished, *p, *srcprefixnul;
     DirTime *dirTime, *dirTimes;
     Header *hdr;
     int cmp, ssnamelen;
@@ -199,11 +199,13 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
     if (fstat (ssfd, &ssstat) < 0) SYSERRNO (fstat);
 
     try {
-
         dirTimes = NULL;
+        lastfilenamefinished = strdup ("");
         lastfilenofinished = 0;
         needhdr = true;
         ok = true;
+        printnextgoodfile = false;
+
         while (true) {
             try {
 
@@ -211,6 +213,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                  * File header should be next in saveset.
                  * It should have correct magic number and be next file in sequence.
                  */
+                fileopen = false;
                 if (needhdr) {
                     read_raw (hdr, (ulong_t)hdr->name - (ulong_t)hdr, false);
                     if (memcmp (hdr->magic, HEADER_MAGIC, 8) != 0) {
@@ -281,15 +284,23 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                 }
 
                 /*
-                 * Call the processing funtion, skipping the data if not enabled.
+                 * Call the processing function, skipping the data if not enabled.
                  */
+                fileopen = true;
                 setimes = false;
                      if (S_ISREG (hdr->stmode)) thisok = read_regular   (hdr, dstname);
                 else if (S_ISDIR (hdr->stmode)) thisok = read_directory (hdr, dstname, &setimes);
                 else if (S_ISLNK (hdr->stmode)) thisok = read_symlink   (hdr, dstname);
                                            else thisok = read_special   (hdr, dstname);
                 ok &= thisok;
+                fileopen = false;
                 lastfilenofinished = hdr->fileno;
+                free (lastfilenamefinished);
+                lastfilenamefinished = strdup (hdr->name);
+                if (printnextgoodfile) {
+                    fprintf (stderr, "ftbackup: next completed file: %s\n", lastfilenamefinished);
+                    printnextgoodfile = false;
+                }
 
                 /*
                  * If restored successfully, try to set ownership, protection and times.
@@ -332,6 +343,10 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                 /*
                  * Some unrecoverable media error, skip to next block with a valid file header.
                  */
+                fprintf (stderr, "ftbackup: last completed file: %s\n", lastfilenamefinished);
+                if (fileopen) {
+                    fprintf (stderr, "ftbackup: partially done file: %s\n", hdr->name);
+                }
                 fprintf (stderr, "ftbackup: searching saveset for next file header\n");
                 while (true) {
                     try {
@@ -349,6 +364,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                 fprintf (stderr, "ftbackup: lost %u file%s due to bad saveset media\n", skipped, ((skipped == 1) ? "" : "s"));
                 needhdr = false;
                 ok = false;
+                printnextgoodfile = true;
             }
         }
 
