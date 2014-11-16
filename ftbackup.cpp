@@ -1040,36 +1040,34 @@ static bool diff_directory (char const *path1, char const *path2)
         file1 = (i < nents1) ? names1[i]->d_name : NULL;
         file2 = (j < nents2) ? names2[j]->d_name : NULL;
 
-        // skip any '.' or '..' entries
-        if ((i < nents1) && ((strcmp (file1, ".") == 0) || (strcmp (file1, "..") == 0))) {
+        // skip any '.' or '..' entries and skip sockets cuz we don't back them up or restore them
+        if ((file1 != NULL) && ((strcmp (file1, ".") == 0) || (strcmp (file1, "..") == 0) || issocket (path1, file1))) {
             i ++;
             continue;
         }
 
-        if ((j < nents2) && ((strcmp (file2, ".") == 0) || (strcmp (file2, "..") == 0))) {
+        if ((file2 != NULL) && ((strcmp (file2, ".") == 0) || (strcmp (file2, "..") == 0) || issocket (path2, file2))) {
             j ++;
             continue;
         }
 
         // do string compare iff there is a name in both arrays
-        if ((i < nents1) && (j < nents2)) cmp = strcmp (file1, file2);
+             if (file1 == NULL) cmp =  1;
+        else if (file2 == NULL) cmp = -1;
+                           else cmp = strcmp (file1, file2);
 
         // if second array empty or its name is after first, first array has a unique name
-        if ((j >= nents2) || (cmp < 0)) {
-            if (!issocket (path1, file1)) {
-                printf ("\ndiff directory only %s contains %s\n", path1, file1);
-                err = true;
-            }
+        if (cmp < 0) {
+            printf ("\ndiff directory only %s contains %s\n", path1, file1);
+            err = true;
             i ++;
             continue;
         }
 
         // if first array empty or its name is after second, second array has a unique name
-        if ((i >= nents1) || (cmp > 0)) {
-            if (!issocket (path2, file2)) {
-                printf ("\ndiff directory only %s contains %s\n", path2, file2);
-                err = true;
-            }
+        if (cmp > 0) {
+            printf ("\ndiff directory only %s contains %s\n", path2, file2);
+            err = true;
             j ++;
             continue;
         }
