@@ -134,7 +134,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     pthread_t compr_thandl, encr_thandl, write_thandl;
     uint32_t i;
 
-    hashsize = (hasher == NULL) ? 0 : hasher->DigestSize ();
+    maybesetdefaulthasher ();
 
     cpinstack = NULL;
     if (cpin) {
@@ -242,10 +242,8 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
      */
     rc = pthread_create (&compr_thandl, NULL, compr_thread_wrapper, this);
     if (rc != 0) SYSERR (pthread_create, rc);
-    if (cripter != NULL) {
-        rc = pthread_create (&encr_thandl, NULL, encr_thread_wrapper, this);
-        if (rc != 0) SYSERR (pthread_create, rc);
-    }
+    rc = pthread_create (&encr_thandl, NULL, encr_thread_wrapper, this);
+    if (rc != 0) SYSERR (pthread_create, rc);
     rc = pthread_create (&write_thandl, NULL, write_thread_wrapper, this);
     if (rc != 0) SYSERR (pthread_create, rc);
 
@@ -285,10 +283,8 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
      */
     rc = pthread_join (compr_thandl, NULL);
     if (rc != 0) SYSERR (pthread_join, rc);
-    if (cripter != NULL) {
-        rc = pthread_join (encr_thandl, NULL);
-        if (rc != 0) SYSERR (pthread_join, rc);
-    }
+    rc = pthread_join (encr_thandl, NULL);
+    if (rc != 0) SYSERR (pthread_join, rc);
     rc = pthread_join (write_thandl, NULL);
     if (rc != 0) SYSERR (pthread_join, rc);
 
@@ -1019,7 +1015,7 @@ void *FTBWriter::compr_thread ()
     void *buf;
 
     block = NULL;
-    bs    = (1 << l2bs) - hashsize;
+    bs    = (1 << l2bs) - hashsize ();
 
     if (xorgc > 0) {
         xorblocks = (Block **) calloc (xorgc, sizeof *xorblocks);
@@ -1256,7 +1252,7 @@ void *FTBWriter::compr_thread ()
 }
 
 /**
- * @brief Fill in data block header and queue block to encr_thread() or write_thread().
+ * @brief Fill in data block header and queue block to encr_thread().
  * @param block = data block to queue
  */
 void FTBWriter::queue_data_block (Block *block)
@@ -1264,18 +1260,16 @@ void FTBWriter::queue_data_block (Block *block)
     Block *xorblock;
     uint32_t bs, i, oldxorbc;
 
-    bs = (1 << l2bs) - hashsize;
+    bs = (1 << l2bs) - hashsize ();
 
     /*
      * Fill in data block header.
      */
     memcpy (block->magic, BLOCK_MAGIC, 8);
-    block->seqno  = ++ lastseqno;
-    block->l2bs   = l2bs;
-    block->xorgc  = xorgc;
-    block->xorsc  = xorsc;
-    block->chksum = 0;
-    block->chksum = - checksumdata (block, bs);
+    block->seqno = ++ lastseqno;
+    block->l2bs  = l2bs;
+    block->xorgc = xorgc;
+    block->xorsc = xorsc;
 
     /*
      * If we are generating XOR blocks, XOR the data block into the XOR block.
@@ -1327,14 +1321,12 @@ void FTBWriter::queue_xor_blocks ()
     Block *block;
     uint32_t bs, i;
 
-    bs = (1 << l2bs) - hashsize;
+    bs = (1 << l2bs) - hashsize ();
     for (i = 0; i < xorgc; i ++) {
         block = xorblocks[i];
         if (block != NULL) {
             memcpy (block->magic, BLOCK_MAGIC, 8);
-            block->xorno  = lastxorno + i + 1;
-            block->chksum = 0;
-            block->chksum = - checksumdata (block, bs);
+            block->xorno = lastxorno + i + 1;
             queue_block (block);
             xorblocks[i] = NULL;
         }
@@ -1343,16 +1335,12 @@ void FTBWriter::queue_xor_blocks ()
 }
 
 /**
- * @brief Queue block with header filled in to write_thread().
+ * @brief Queue block with header filled in to encr_thread().
  * @param block = block to queue or NULL for end-of-saveset marker
  */
 void FTBWriter::queue_block (Block *block)
 {
-    if (cripter != NULL) {
-        encrqueue.enqueue (block);
-    } else {
-        writequeue.enqueue (block);
-    }
+    encrqueue.enqueue (block);
 }
 
 /**
@@ -1402,7 +1390,7 @@ void *FTBWriter::encr_thread ()
     uint32_t bs, bsq, cbs, i;
     uint64_t *array;
 
-    cbs = cripter->BlockSize ();
+    cbs = (cripter == NULL) ? 0 : cripter->BlockSize ();
 
     /*
      * Make sure the 'i = 4' in the for loops below will work.
@@ -1422,64 +1410,71 @@ void *FTBWriter::encr_thread ()
     /*
      * Get source of random numbers for the nonces.
      */
-    noncefile = fopen ("/dev/urandom", "r");
-    if (noncefile == NULL) {
-        fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", mystrerr (errno));
-        abort ();
+    noncefile = NULL;
+    if (cbs > 0) {
+        noncefile = fopen ("/dev/urandom", "r");
+        if (noncefile == NULL) {
+            fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", mystrerr (errno));
+            abort ();
+        }
     }
 
     /*
      * Get block size in bytes, excluding hash bytes at the end.
      */
-    bs  = (1 << l2bs) - hashsize;
+    bs = (1 << l2bs) - hashsize ();
 
     /*
-     * Get block size in quadwords, including hash quadwords at the end.
+     * Get block size in quadwords, excluding hash quadwords at the end.
      */
-    bsq = 1 << (l2bs - 3);
+    bsq = bs / 8;
 
     /*
      * Get a block to encrypt.
      */
     while ((block = encrqueue.dequeue ()) != NULL) {
+        if (cbs > 0) {
 
-        /*
-         * Fill in the nonce with a random number to salt the encryption.
-         */
-        if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
-            fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
-            abort ();
+            /*
+             * Fill in the nonce with a random number to salt the encryption.
+             */
+            if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
+                fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
+                abort ();
+            }
+
+            /*
+             * Use nonce for init vector and encrypt the block, excluding the hash,
+             * Leave magic number and everything else before nonce in plain text.
+             */
+            // CBC: enc[i] = encrypt ( clr[i] ^ enc[i-1] )
+            array = (uint64_t *) block;
+            switch (cbs) {
+                case 8: {
+                    for (i = 4; i < bsq; i ++) {
+                        array[i] ^= array[i-1];
+                        cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                    }
+                    break;
+                }
+                case 16: {
+                    for (i = 4; i < bsq; i += 2) {
+                        array[i+0] ^= array[i-2];
+                        array[i+1] ^= array[i-1];
+                        cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                    }
+                    break;
+                }
+                default: abort ();
+            }
         }
 
         /*
-         * Compute hash of block up to where the hash goes then put hash at end.
+         * Hash the encrypted data.
          */
-        hasher->CalculateDigest ((uint8_t *)block + bs, (uint8_t *)block, bs);
-
-        /*
-         * Use nonce for init vector and encrypt the block, including the hash,
-         * Leave magic number and everything else before nonce in plain text.
-         */
-        // enc[i] = encrypt ( clr[i] ^ enc[i-1] )
-        array = (uint64_t *) block;
-        switch (cbs) {
-            case 8: {
-                for (i = 4; i < bsq; i ++) {
-                    array[i] ^= array[i-1];
-                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                }
-                break;
-            }
-            case 16: {
-                for (i = 4; i < bsq; i += 2) {
-                    array[i+0] ^= array[i-2];
-                    array[i+1] ^= array[i-1];
-                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                }
-                break;
-            }
-            default: abort ();
-        }
+        hasher->Update (hashinibuf, hashinilen);
+        hasher->Update ((uint8_t *)block, bs);
+        hasher->Final  ((uint8_t *)block + bs);
 
         /*
          * Queue the encrypted block for writing to the saveset.
@@ -1492,7 +1487,7 @@ void *FTBWriter::encr_thread ()
      */
     writequeue.enqueue (NULL);
 
-    fclose (noncefile);
+    if (noncefile != NULL) fclose (noncefile);
 
     printthreadcputime ("encrypt");
 

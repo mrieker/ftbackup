@@ -59,7 +59,6 @@ struct Block {
     uint32_t    seqno;      // block sequence number
     uint32_t    xorno;      // xor sequence number (0 for data blocks)
     uint8_t     nonce[16];  // encryption nonce (zeroes if not encrypted)
-    uint32_t    chksum;     // block checksum
     uint32_t    hdroffs;    // offset of first header in block
     uint8_t     l2bs;       // log2 block size
     uint8_t     xorbc;      // xor block count (0 for data blocks)
@@ -84,13 +83,14 @@ struct Header {
 };
 
 struct FTBackup {
-    uint32_t hashsize;
     uint8_t  l2bs;
     uint8_t  xorgc;
     uint8_t  xorsc;
 
     CryptoPP::BlockCipher *cripter;
     CryptoPP::HashTransformation *hasher;
+    uint8_t *hashinibuf;
+    uint32_t hashinilen;
 
     FTBackup ();
     ~FTBackup ();
@@ -98,8 +98,10 @@ struct FTBackup {
     static void print_header (FILE *out, Header *hdr, char const *name);
     bool blockisvalid (Block *block);
     bool blockbaseisvalid (Block *block);
+    int decodecipherargs (int argc, char **argv, int i, bool enc);
+    void maybesetdefaulthasher ();
+    uint32_t hashsize ();
     static void xorblockdata (void *dst, void const *src, uint32_t nby);
-    static uint32_t checksumdata (void const *src, uint32_t nby);
 };
 
 struct IFSAccess {

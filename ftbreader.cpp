@@ -113,14 +113,14 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
     uint32_t dstnameall, dstnamelen, dstprefixlen, hassegno, hdrall, lastfilenofinished;
     uint32_t skipped, srcnamelen, srcprefixlen, xattrslistlen, xattrsvalulen;
 
+    maybesetdefaulthasher ();
+
     dstnameall = 0;
     dstnamebuf = NULL;
     hdr        = (Header *) malloc (sizeof *hdr);
     hdrall     = sizeof *hdr;
 
     if (hdr == NULL) NOMEM ();
-
-    hashsize = (hasher == NULL) ? 0 : hasher->DigestSize ();
 
     dstprefixlen = strlen (dstprefix);
     srcprefixlen = strlen (srcprefix);
@@ -919,7 +919,7 @@ nextblock:
     /*
      * Set up the data descriptor.
      */
-    zstrm.avail_in = (1 << l2bs) - offs - hashsize;
+    zstrm.avail_in = (1 << l2bs) - offs - hashsize ();
     zstrm.next_in  = (uint8_t *)rblock + offs;
     return rblock;
 }
@@ -1019,11 +1019,11 @@ void FTBReader::read_first_block ()
         xorblocks = (Block **) malloc (xorgc * sizeof *xorblocks);
         if (xorblocks == NULL) NOMEM ();
         for (i = 0; i < xorgc; i ++) {
-            xorblocks[i] = (Block *) calloc (1, bs - hashsize);
+            xorblocks[i] = (Block *) calloc (1, bs - hashsize ());
             if (xorblocks[i] == NULL) NOMEM ();
         }
         i = (tblock->seqno - 1) % xorgc;
-        memcpy (xorblocks[i], tblock, bs - hashsize);
+        memcpy (xorblocks[i], tblock, bs - hashsize ());
 
         gotxors = (uint8_t *) calloc (xorgc, sizeof *gotxors);
         if (gotxors == NULL) NOMEM ();
@@ -1042,11 +1042,12 @@ FTBReader::LinkedBlock *FTBReader::read_or_recover_block ()
 {
     int rc;
     LinkedBlock *linkedBlock, **lLinkedBlock;
-    uint32_t bs, i;
+    uint32_t bs, bsnh, i;
     uint64_t lastreadoffs;
 
     bs = 1 << l2bs;
     if (readoffset % bs != 0) abort ();
+    bsnh = bs - hashsize ();
 
     /*
      * Maybe block has already been read by a previous recovery operation.
@@ -1097,7 +1098,7 @@ noxoread:
             goto noxoread;
         }
 
-        // make sure the magic number and checksum etc are valid
+        // make sure the magic number etc are valid
         // if not, treat it just like a read error
         if (!blockisvalid (&linkedBlock->block)) {
             fprintf (stderr, "ftbackup: pread(%llu) saveset error: block not valid\n", lastreadoffs);
@@ -1214,7 +1215,7 @@ noxoread:
             if (linkedBlock->block.xorno >  lastxorno + xorgc) {
                 lastxorno = linkedBlock->block.xorno - xorgc;
                 memset (gotxors, 0, xorgc * sizeof *gotxors);
-                for (i = 0; i < xorgc; i ++) memset (xorblocks[i], 0, bs - hashsize);
+                for (i = 0; i < xorgc; i ++) memset (xorblocks[i], 0, bsnh);
             }
 
             /*
@@ -1227,17 +1228,15 @@ noxoread:
                  * There is exactly one missing data block from the group,
                  * so XORing in this one should recover the missing block.
                  */
-                xorblockdata (&linkedBlock->block, xorblocks[i], bs - hashsize);
+                xorblockdata (&linkedBlock->block, xorblocks[i], bsnh);
 
                 /*
                  * The result should be a valid data block.
                  * If not, just go on reading.
                  */
                 memcpy (linkedBlock->block.magic, BLOCK_MAGIC, 8);
-                linkedBlock->block.xorno  = 0;
-                linkedBlock->block.xorbc  = 0;
-                linkedBlock->block.chksum = 0;
-                linkedBlock->block.chksum = - checksumdata (&linkedBlock->block, bs - hashsize);
+                linkedBlock->block.xorno = 0;
+                linkedBlock->block.xorbc = 0;
                 if (!blockisvalid (&linkedBlock->block)) {
                     fprintf (stderr, "ftbackup: recovered block at %llu is not valid\n", lastreadoffs);
                     continue;
@@ -1287,14 +1286,14 @@ noxoread:
         if (lastxorno < i) {
             lastxorno = i;
             memset (gotxors, 0, xorgc * sizeof *gotxors);
-            for (i = 0; i < xorgc; i ++) memset (xorblocks[i], 0, bs - hashsize);
+            for (i = 0; i < xorgc; i ++) memset (xorblocks[i], 0, bsnh);
         }
 
         /*
          * Valid data block, XOR it into group.
          */
         i = (linkedBlock->block.seqno - 1) % xorgc;
-        xorblockdata (xorblocks[i], &linkedBlock->block, bs - hashsize);
+        xorblockdata (xorblocks[i], &linkedBlock->block, bsnh);
         gotxors[i] ++;
 
         /*
@@ -1436,13 +1435,15 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
  */
 bool FTBReader::decrypt_block (Block *block, uint32_t bs)
 {
-    return decrypt_block (cripter, hasher, block, bs);
-}
-
-bool FTBReader::decrypt_block (CryptoPP::BlockCipher *cripter, CryptoPP::HashTransformation *hasher, Block *block, uint32_t bs)
-{
+    bool hashok;
     uint32_t i;
     uint64_t *array;
+
+    bs -= hashsize ();
+
+    hasher->Update (hashinibuf, hashinilen);
+    hasher->Update ((uint8_t *)block, bs);
+    hashok = hasher->Verify ((uint8_t *)block + bs);
 
     if (cripter != NULL) {
         array = (uint64_t *) block;
@@ -1465,17 +1466,9 @@ bool FTBReader::decrypt_block (CryptoPP::BlockCipher *cripter, CryptoPP::HashTra
             }
             default: abort ();
         }
-
-        bs -= hasher->DigestSize ();
-        if (!hasher->VerifyDigest ((uint8_t *)block + bs, (uint8_t *)block, bs)) {
-            return false;
-        }
-
-        // so the checksum will work
-        memset (block->nonce, 0, sizeof block->nonce);
     }
 
-    return true;
+    return hashok;
 }
 
 /**
