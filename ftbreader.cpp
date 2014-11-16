@@ -1461,20 +1461,20 @@ bool FTBReader::decrypt_block (Block *block, uint32_t bs)
     hasher->Update ((uint8_t *)block, bs);
     hashok = hasher->Verify ((uint8_t *)block + bs);
 
-    if (cripter != NULL) {
+    if (cipher != NULL) {
         array = (uint64_t *) block;
 
-        switch (cripter->BlockSize ()) {
+        switch (cipher->BlockSize ()) {
             case 8: {
                 for (i = bs / 8; -- i >= 4;) {
-                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                    cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
                     array[i] ^= array[i-1];
                 }
                 break;
             }
             case 16: {
                 for (i = bs / 8; (i -= 2) >= 4;) {
-                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                    cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
                     array[i+0] ^= array[i-2];
                     array[i+1] ^= array[i-1];
                 }

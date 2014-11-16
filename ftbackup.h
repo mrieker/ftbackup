@@ -27,6 +27,8 @@
 #define MAXBLOCKSIZE (1024*1024*1024U)
 #define SEGNODECDIGS 6
 #define FILEIOSIZE (32768U)
+#define DEF_CIPHERNAME "AES"
+#define DEF_HASHERNAME "SHA1"
 
 #define DEFXORSC 31 // write one XOR block per 31 data blocks
 #define DEFXORGC 2  // write XOR blocks in groups of 2, ie, after 62 data blocks
@@ -87,7 +89,7 @@ struct FTBackup {
     uint8_t  xorgc;
     uint8_t  xorsc;
 
-    CryptoPP::BlockCipher *cripter;
+    CryptoPP::BlockCipher *cipher;
     CryptoPP::HashTransformation *hasher;
     uint8_t *hashinibuf;
     uint32_t hashinilen;

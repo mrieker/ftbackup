@@ -1528,7 +1528,7 @@ FTBackup::FTBackup ()
     l2bs       = __builtin_ctz (DEFBLOCKSIZE);
     xorgc      = DEFXORGC;
     xorsc      = DEFXORSC;
-    cripter    = NULL;
+    cipher     = NULL;
     hasher     = NULL;
     hashinibuf = NULL;
     hashinilen = 0;
@@ -1536,7 +1536,7 @@ FTBackup::FTBackup ()
 
 FTBackup::~FTBackup ()
 {
-    if (cripter    != NULL) delete cripter;
+    if (cipher     != NULL) delete cipher;
     if (hasher     != NULL) delete hasher;
     if (hashinibuf != NULL) free (hashinibuf);
 }
@@ -1632,8 +1632,8 @@ uint32_t FTBackup::hashsize ()
     uint32_t cbs, hs;
 
     hs = hasher->DigestSize ();
-    if (cripter != NULL) {
-        cbs = cripter->BlockSize ();
+    if (cipher != NULL) {
+        cbs = cipher->BlockSize ();
         hs  = (hs + cbs - 1) & -cbs;
     }
     return hs;
@@ -1667,41 +1667,62 @@ void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
 }
 
 /**
- * @brief Decode command-line encrypt/decrypt arguments and fill in cripter, hasher, hashinibuf, hashinilen.
- *          -{de,en}crypt <blockciphername> <passwordhasher> <password>
+ * @brief Decode command-line encrypt/decrypt arguments and fill in cipher, hasher, hashinibuf, hashinilen.
+ *          -{de,en}crypt [:<blockciphername>] [:<passwordhasher>] <password>
  */
 int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
 {
+    char const *ciphername, *hashername;
     char keybuff[4096], keybufr[4096], *keyline, *p;
+    CryptoPP::BlockCipher *newcipher;
+    CryptoPP::HashTransformation *newhasher;
     FILE *keyfile;
     size_t defkeylen;
 
-    /*
-     * Get block cipher algorithm.
-     */
-    if (++ i >= argc) return -1;
-    cripter = getciphercontext (argv[i], enc);
-    if (cripter == NULL) return -1;
-    defkeylen = cripter->DefaultKeyLength ();
+    ciphername = DEF_CIPHERNAME;
+    hashername = DEF_HASHERNAME;
+    cipher  = getciphercontext (ciphername, enc);
+    hasher  = gethashercontext (hashername);
+    keyline = NULL;
 
-    /*
-     * Get password hasher algorithm.
-     */
-    if (++ i >= argc) return -1;
-    hasher = gethashercontext (argv[i]);
-    if (hasher == NULL) return -1;
+    while (++ i < argc) {
+        if (argv[i][0] == ':') {
+            newcipher = getciphercontext (argv[i] + 1, enc);
+            if (newcipher != NULL) {
+                if (cipher != NULL) delete cipher;
+                ciphername = argv[i] + 1;
+                cipher = newcipher;
+                continue;
+            }
+            newhasher = gethashercontext (argv[i] + 1);
+            if (newhasher != NULL) {
+                if (hasher != NULL) delete hasher;
+                hashername = argv[i] + 1;
+                hasher = newhasher;
+                continue;
+            }
+            fprintf (stderr, "ftbackup: unknown cipher/hasher %s\n", argv[i] + 1);
+            return -1;
+        }
+        keyline = argv[i];
+        break;
+    }
+    if (keyline == NULL) {
+        fprintf (stderr, "ftbackup: missing key string\n");
+        return -1;
+    }
+
+    defkeylen  = cipher->DefaultKeyLength ();
     hashinilen = hasher->DigestSize ();
     if (hashinilen < defkeylen) {
         fprintf (stderr, "ftbackup: hash %s size %u too small for cipher %s key size %lu\n",
-                argv[i], hashinilen, argv[i-1], defkeylen);
+                hashername, hashinilen, ciphername, defkeylen);
         return -1;
     }
 
     /*
      * Get key, either directly from arg list or from a file.
      */
-    if (++ i >= argc) return -1;
-    keyline = argv[i];
     if (strcmp (keyline, "-") == 0) {
         while (true) {
             if (!readpasswd ("password: ", keybuff, sizeof keybuff)) return -1;
@@ -1739,7 +1760,7 @@ int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
     if (hashinibuf == NULL) NOMEM ();
     hasher->Update ((byte const *) keyline, (size_t) strlen (keyline));
     hasher->Final (hashinibuf);
-    cripter->SetKey (hashinibuf, defkeylen, CryptoPP::g_nullNameValuePairs);
+    cipher->SetKey (hashinibuf, defkeylen, CryptoPP::g_nullNameValuePairs);
 
     return i;
 }
@@ -1801,13 +1822,6 @@ static CryptoPP::BlockCipher *getciphercontext (char const *name, bool enc)
     }
     CIPHLIST
 #undef _CIPHOP
-
-    fprintf (stderr, "ftbackup: unknown cipher algorithm %s\n", name);
-#define _CIPHOP(Name) \
-    fprintf (stderr, "ftbackup:   %s\n", #Name);
-    CIPHLIST
-#undef _CIPHOP
-
     return NULL;
 }
 
@@ -1837,12 +1851,6 @@ static CryptoPP::HashTransformation *gethashercontext (char const *name)
     }
     HASHLIST
 #undef _HASHOP
-
-    fprintf (stderr, "ftbackup: unknown hasher algorithm %s\n", name);
-#define _HASHOP(Name) \
-    fprintf (stderr, "ftbackup:   %s\n", #Name);
-    HASHLIST
-#undef _HASHOP
     return NULL;
 }
 
@@ -1862,12 +1870,24 @@ void FTBackup::maybesetdefaulthasher ()
 
 static void usagecipherargs (char const *decenc)
 {
-    fprintf (stderr, "    -%s <cipher> <hasher> <keyspec>\n", decenc);
-    fprintf (stderr, "                            cipher = block cipher algorithm (use '?' for list)\n");
-    fprintf (stderr, "                            hasher = key hasher algorithm (use '?' for list)\n");
-    fprintf (stderr, "                            keyspec = - : prompt at stdin\n");
-    fprintf (stderr, "                              @filename : read from first line of file\n");
-    fprintf (stderr, "                                   else : literal string\n");
+    fprintf (stderr, "    -%s [:<cipher>] [:<hasher>] <keyspec>\n", decenc);
+    fprintf (stderr, "                            cipher = block cipher algorithm (default %s)\n", DEF_CIPHERNAME);
+    fprintf (stderr, "                            hasher = key hasher algorithm (default %s)\n", DEF_HASHERNAME);
+    fprintf (stderr, "                           keyspec = - : prompt at stdin\n");
+    fprintf (stderr, "                             @filename : read from first line of file\n");
+    fprintf (stderr, "                                  else : literal string\n");
+
+    fprintf (stderr, "              cipher algorithms:"
+#define _CIPHOP(Name) " " #Name
+    CIPHLIST
+#undef _CIPHOP
+    "\n");
+
+    fprintf (stderr, "              hasher algorithms:"
+#define _HASHOP(Name) " " #Name
+    HASHLIST
+#undef _HASHOP
+    "\n");
 }
 
 static bool readpasswd (char const *prompt, char *pwbuff, size_t pwsize)

@@ -910,7 +910,7 @@ void *FTBWriter::encr_thread ()
     /*
      * Maybe get source of random numbers for the nonces.
      */
-    if (cripter != NULL) {
+    if (cipher != NULL) {
         noncefile = fopen ("/dev/urandom", "r");
         if (noncefile == NULL) {
             fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", mystrerr (errno));
@@ -1043,7 +1043,7 @@ void FTBWriter::hash_block (Block *block)
 
     bs = (1U << l2bs) - hashsize ();
 
-    if (cripter != NULL) {
+    if (cipher != NULL) {
 
         /*
          * Make sure the 'i = 4' in the for loops below will work.
@@ -1063,7 +1063,7 @@ void FTBWriter::hash_block (Block *block)
         /*
          * Fill in the nonce with a random number to salt the encryption.
          */
-        cbs = cripter->BlockSize ();
+        cbs = cipher->BlockSize ();
         if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
             fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
             abort ();
@@ -1081,7 +1081,7 @@ void FTBWriter::hash_block (Block *block)
             case 8: {
                 for (i = 4; i < bsq; i ++) {
                     array[i] ^= array[i-1];
-                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                    cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
                 }
                 break;
             }
@@ -1089,7 +1089,7 @@ void FTBWriter::hash_block (Block *block)
                 for (i = 4; i < bsq; i += 2) {
                     array[i+0] ^= array[i-2];
                     array[i+1] ^= array[i-1];
-                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                    cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
                 }
                 break;
             }
