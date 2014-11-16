@@ -3,9 +3,6 @@
 #include "ftbwriter.h"
 
 static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val);
-static void checkpointheader (FILE *file, Header const *header);
-static void writejsonstring (FILE *file, char const *str);
-static void reloadheader (Header *header, JSon *val);
 
 static void printthreadcputime (char const *name)
 {
@@ -28,21 +25,12 @@ FTBWriter::FTBWriter ()
 
     freeblocks    = NULL;
     xorblocks     = NULL;
-    cpin          = false;
-    cpincomprinit = false;
-    cpout         = false;
     zisopen       = false;
-    cpoutname     = NULL;
     ssbasename    = NULL;
     sssegname     = NULL;
     inodesdevno   = 0;
-    cpoutfile     = NULL;
     inodeslist    = NULL;
-    cpoutfd       = -1;
     ssfd          = -1;
-    cpinstack     = NULL;
-    pthread_cond_init  (&cpincond,  NULL);
-    pthread_mutex_init (&cpinmutex, NULL);
     lastverbsec   = 0;
     inodessize    = 0;
     inodesused    = 0;
@@ -77,24 +65,12 @@ FTBWriter::~FTBWriter ()
         free (xorblocks);
     }
 
-    if (cpoutfile != NULL) {
-        fclose (cpoutfile);
-    }
-
     if (inodeslist != NULL) {
         free (inodeslist);
     }
 
-    if (cpoutfd >= 0) {
-        close (cpoutfd);
-    }
-
     if (ssfd >= 0) {
         close (ssfd);
-    }
-
-    if (cpinstack != NULL) {
-        delete cpinstack;
     }
 
     if (inodesmtim != NULL) {
@@ -132,102 +108,26 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     Header hdr;
     int rc;
     pthread_t compr_thandl, encr_thandl, write_thandl;
-    uint32_t i;
 
     maybesetdefaulthasher ();
 
-    cpinstack = NULL;
-    if (cpin) {
-
-        /*
-         * Reload stack from a checkpoint file.
-         */
-
-        // read checkpoint file into memory
-        // it is in a json-like format
-
-        FILE *file = fopen (cpinname, "r");
-        if (file == NULL) {
-            fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", cpoutname, mystrerr (errno));
-            return EX_SSIO;
-        }
-        cpinstack = JSon::ctor (file);
-        fclose (file);
-
-        // cpinstack is a JSonStack that has one element per stack frame that we have to reload
-        // its first element should be the one saved by this method way down below during cpout
-
-        JSon *wss   = cpinstack->poptop ();
-        JSon *wsss  = wss->find ("write_saveset");
-        JSon *wsssv = wsss->find ("version");
-
-        if (strcmp (wsssv->getstring ()->c_str (), GITCOMMITHASH) != 0) {
-            fprintf (stderr, "ftbackup: checkpoint version %s not program version %s\n",
-                    wsssv->getstring ()->c_str (), GITCOMMITHASH);
-            delete wss;
-            return EX_SSIO;
-        }
-
-        byteswrittentoseg = wsss->find ("byteswrittentoseg")->getuinteger ();
-        inodesdevno = wsss->find ("inodesdevno")->getuinteger ();
-        l2bs        = wsss->find ("l2bs")       ->getuinteger ();
-        lastfileno  = wsss->find ("lastfileno") ->getuinteger ();
-        lastseqno   = wsss->find ("lastseqno")  ->getuinteger ();
-        lastxorno   = wsss->find ("lastxorno")  ->getuinteger ();
-        opt_segsize = wsss->find ("opt_segsize")->getuinteger ();
-        opt_since   = wsss->find ("opt_since")  ->getuinteger ();
-        thissegno   = wsss->find ("thissegno")  ->getuinteger ();
-        xorgc       = wsss->find ("xorgc")      ->getuinteger ();
-        xorsc       = wsss->find ("xorsc")      ->getuinteger ();
-
-        JSon *wsssi = wsss->find ("inodes");
-
-        inodessize = inodesused = wsssi->getcount ();
-        inodeslist = (ino_t *) malloc (inodesused * sizeof *inodeslist);
-        inodesmtim = (uint64_t *) malloc (inodesused * sizeof *inodesmtim);
-        for (i = 0; i < inodesused; i ++) {
-            JSon *inval = wsssi->poptop ();
-            inodeslist[i] = inval->find ("i")->getuinteger ();
-            inodesmtim[i] = inval->find ("t")->getuinteger ();
-            delete inval;
-        }
-
-        delete wss;
-
-        /*
-         * Re-open the last saveset segment file for append mode.
-         */
+    /*
+     * Create saveset file.
+     */
+    if (strcmp (ssname, "-") == 0) {
+        ssfd = STDOUT_FILENO;
+        fflush (stdout);
+    } else {
         if (opt_segsize > 0) {
             ssbasename = ssname;
             sssegname  = (char *) alloca (strlen (ssbasename) + SEGNODECDIGS + 4);
             ssname     = sssegname;
-            sprintf (sssegname, "%s%.*u", ssbasename, SEGNODECDIGS, thissegno);
+            sprintf (sssegname, "%s%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
         }
-        ssfd = open (ssname, O_WRONLY | O_APPEND | ooptions);
+        ssfd = open (ssname, O_WRONLY | O_CREAT | O_TRUNC | ooptions, 0666);
         if (ssfd < 0) {
-            fprintf (stderr, "ftbackup: open(%s) saveset error: %s\n", ssname, mystrerr (errno));
+            fprintf (stderr, "ftbackup: creat(%s) saveset error: %s\n", ssname, mystrerr (errno));
             return EX_SSIO;
-        }
-    } else {
-
-        /*
-         * Create saveset file.
-         */
-        if (strcmp (ssname, "-") == 0) {
-            ssfd = STDOUT_FILENO;
-            fflush (stdout);
-        } else {
-            if (opt_segsize > 0) {
-                ssbasename = ssname;
-                sssegname  = (char *) alloca (strlen (ssbasename) + SEGNODECDIGS + 4);
-                ssname     = sssegname;
-                sprintf (sssegname, "%s%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
-            }
-            ssfd = open (ssname, O_WRONLY | O_CREAT | O_TRUNC | ooptions, 0666);
-            if (ssfd < 0) {
-                fprintf (stderr, "ftbackup: creat(%s) saveset error: %s\n", ssname, mystrerr (errno));
-                return EX_SSIO;
-            }
         }
     }
 
@@ -248,17 +148,6 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     if (rc != 0) SYSERR (pthread_create, rc);
 
     /*
-     * If reloading stack from a checkpoint, wait for compr_thread() to reload its frame.
-     */
-    if (cpin) {
-        pthread_mutex_lock (&cpinmutex);
-        while (!cpincomprinit) {
-            pthread_cond_wait (&cpincond, &cpinmutex);
-        }
-        pthread_mutex_unlock (&cpinmutex);
-    }
-
-    /*
      * Process root path of files to back up.
      */
     ok = write_file (rootpath, NULL);
@@ -266,10 +155,8 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     /*
      * Write EOF header so reader knows it got the whole saveset.
      */
-    if (!cpout) {
-        memset (&hdr, 0, sizeof hdr);
-        write_header (&hdr);
-    }
+    memset (&hdr, 0, sizeof hdr);
+    write_header (&hdr);
 
     /*
      * Tell the other threads to flush and terminate.
@@ -287,37 +174,6 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     if (rc != 0) SYSERR (pthread_join, rc);
     rc = pthread_join (write_thandl, NULL);
     if (rc != 0) SYSERR (pthread_join, rc);
-
-    /*
-     * Maybe finish writing the checkpoint file.
-     */
-    if (cpout) {
-        open_cpout ();
-        fprintf (cpoutfile, "{write_saveset:{version:\"%s\"", GITCOMMITHASH);
-
-        fprintf (cpoutfile, ",byteswrittentoseg:%llu", byteswrittentoseg);
-        fprintf (cpoutfile, ",inodesdevno:%lu", inodesdevno);
-        fprintf (cpoutfile, ",l2bs:%u", l2bs);
-        fprintf (cpoutfile, ",lastfileno:%u", lastfileno);
-        fprintf (cpoutfile, ",lastseqno:%u", lastseqno);
-        fprintf (cpoutfile, ",lastxorno:%u", lastxorno);
-        fprintf (cpoutfile, ",opt_segsize:%llu", opt_segsize);
-        fprintf (cpoutfile, ",opt_since:%llu", opt_since);
-        fprintf (cpoutfile, ",thissegno:%u", thissegno);
-        fprintf (cpoutfile, ",xorgc:%u", xorgc);
-        fprintf (cpoutfile, ",xorsc:%u", xorsc);
-
-        fprintf (cpoutfile, ",inodes:[");
-        for (i = 0; i < inodesused; i ++) {
-            if (i > 0) fputc (',', cpoutfile);
-            fprintf (cpoutfile, "{i:%lu,t:%llu}", inodeslist[i], inodesmtim[i]);
-        }
-
-        if (fclose (cpoutfile) < 0) {
-            fprintf (stderr, "ftbackup: fclose(%s) error: %s\n", cpoutname, mystrerr (errno));
-        }
-        cpoutfile = NULL;
-    }
 
     /*
      * Finished, close saveset file.
@@ -480,7 +336,7 @@ static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val)
  */
 bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
 {
-    bool ok, reloaded;
+    bool ok;
     int fd, rc;
     struct stat statend;
     uint32_t i, plen;
@@ -516,52 +372,19 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
         return false;
     }
 
-    /*
-     * Maybe we are restoring stack from a checkpoint.
-     */
-    ofs      = 0;
-    ok       = true;
-    reloaded = false;
-    if (cpin) {
-
-        /*
-         * If so, reload old header contents (the name is the same we hope).
-         * It is critical to get the original size in case it has changed,
-         * cuz the header has already been written to the saveset with the
-         * original size.
-         */
-        JSon *regf = cpinstack->poptop ();
-        if (regf != NULL) {
-            JSon *regp = regf->find ("write_regular");
-            if (regp == NULL) {
-                fprintf (stderr, "ftbackup: stack frames mismatched, unable to reload\n");
-                exit (EX_SSIO);
-            }
-            reloadheader (hdr, regp->find ("hdr"));
-            ofs = regp->find ("ofs")->getuinteger ();
-            ok  = regp->find ("ok")->getuinteger ();
-            delete regf;
-            reloaded = true;
-        }
-        delete cpinstack;
-        cpinstack = NULL;
-        cpin = false;
-        unlink (cpinname);
-    }
+    ofs = 0;
+    ok  = true;
 
     /*
-     * If nothing reloaded from checkpoint, write out header.
+     * Write out header.
      */
-    if (!reloaded) {
-        write_header (hdr);
-    }
+    write_header (hdr);
 
     /*
      * Write file contents to saveset.
      * We always write the exact number of bytes shown in the header.
      */
     for (; ofs < hdr->size; ofs += rc) {
-        if (cpout) goto cpoutreq;
         len  = hdr->size - ofs;                                 // number of bytes to end-of-file
         if (len > FILEIOSIZE) len = FILEIOSIZE;                 // never more than this at a time
         plen = (len + PAGESIZE - 1) & -PAGESIZE;                // page-aligned length for O_DIRECT
@@ -630,19 +453,6 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     tfs->fsclose (fd);
 
     return ok;
-
-    /*
-     * Checkpoint requested.
-     */
-cpoutreq:
-    tfs->fsclose (fd);
-    if (open_cpout ()) {
-        fprintf (stderr, "ftbackup: checkpoint in %s offset %llu\n", hdr->name, ofs);
-    }
-    fprintf (cpoutfile, "{write_regular:{hdr:");
-    checkpointheader (cpoutfile, hdr);
-    fprintf (cpoutfile, ",ofs:%llu,ok:%d}},", ofs, ok);
-    return true;
 }
 
 /**
@@ -650,7 +460,7 @@ cpoutreq:
  */
 bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
 {
-    bool ok, reloaded;
+    bool ok;
     char *bbb, *buf, *path;
     char const *name;
     int i, j, len, longest, nents, pathlen;
@@ -658,164 +468,106 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     struct stat statend;
 
     /*
-     * See if reloading stack from checkpoint.
+     * Read and sort the directory contents.
      */
-    reloaded = false;
-    if (cpin) {
+    nents = tfs->fsscandir (hdr->name, &names, NULL, alphasort);
+    if (nents < 0) {
+        fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", hdr->name, mystrerr (errno));
+        return false;
+    }
 
-        /*
-         * If so, read remaining name list from checkpoint record.
-         */
-        JSon *dir = cpinstack->poptop ();
-        if (dir != NULL) {
-            JSon *dirwd = dir->find ("write_directory");
-            if (dirwd == NULL) {
-                fprintf (stderr, "ftbackup: stack frames mismatched, unable to reload\n");
-                exit (EX_SSIO);
-            }
-            reloadheader (hdr, dirwd->find ("hdr"));
-            JSon *jnames = dirwd->find ("names");
-            nents = jnames->getcount ();
-            names = (struct dirent **) malloc (nents * sizeof *names);
-            if (names == NULL) NOMEM ();
-            longest = 0;
+    /*
+     * If directory contains ~SKIPDIR.FTB pretend that is the only file it contains.
+     */
+    for (i = 0; i < nents; i ++) {
+        de = names[i];
+        if (strcmp (de->d_name, "~SKIPDIR.FTB") == 0) {
+            fprintf (stderr, "ftbackup: skipping directory %s for containing ~SKIPDIR.FTB\n", hdr->name);
             for (i = 0; i < nents; i ++) {
-                JSon *jname = jnames->poptop ();
-                name = jname->getstring ()->c_str ();
-                len = strlen (name) + 1;
-                if (longest < len) longest = len;
-                de = (struct dirent *) malloc (sizeof *de);
-                if (de == NULL) NOMEM ();
-                strncpy (de->d_name, name, sizeof de->d_name);
-                names[i] = de;
-                delete jname;
+                if (names[i] != de) free (names[i]);
             }
-            ok = dirwd->find ("ok")->getuinteger ();
-            delete dir;
-            reloaded = true;
-
-            pathlen = strlen (hdr->name);
-            if ((pathlen > 0) && (hdr->name[pathlen-1] == '/')) -- pathlen;
-            path = (char *) alloca (pathlen + longest + 2);
-            memcpy (path, hdr->name, pathlen);
-            path[pathlen++] = '/';
-        } else {
-
-            /*
-             * False alarm about checkpoint being active, cuz stack is empty.
-             * Close it out so we don't see it any more.
-             */
-            delete cpinstack;
-            cpinstack = NULL;
-            cpin = false;
-            unlink (cpinname);
+            nents = 1;
+            names[0] = de;
+            break;
         }
     }
 
-    if (!reloaded) {
-
-        /*
-         * Read and sort the directory contents.
-         */
-        nents = tfs->fsscandir (hdr->name, &names, NULL, alphasort);
-        if (nents < 0) {
-            fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", hdr->name, mystrerr (errno));
-            return false;
+    /*
+     * Get length of the longest name including null terminator.
+     */
+    longest = 0;
+    for (i = 0; i < nents; i ++) {
+        de = names[i];
+        name = de->d_name;
+        if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
+            len = strlen (name) + 1;
+            if (longest < len) longest = len;
         }
-
-        /*
-         * If directory contains ~SKIPDIR.FTB pretend that is the only file it contains.
-         */
-        for (i = 0; i < nents; i ++) {
-            de = names[i];
-            if (strcmp (de->d_name, "~SKIPDIR.FTB") == 0) {
-                fprintf (stderr, "ftbackup: skipping directory %s for containing ~SKIPDIR.FTB\n", hdr->name);
-                for (i = 0; i < nents; i ++) {
-                    if (names[i] != de) free (names[i]);
-                }
-                nents = 1;
-                names[0] = de;
-                break;
-            }
-        }
-
-        /*
-         * Get length of the longest name including null terminator.
-         */
-        longest = 0;
-        for (i = 0; i < nents; i ++) {
-            de = names[i];
-            name = de->d_name;
-            if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
-                len = strlen (name) + 1;
-                if (longest < len) longest = len;
-            }
-        }
-
-        /*
-         * Set up a buffer that will hold the directory path + the longest filename therein.
-         */
-        pathlen = strlen (hdr->name);
-        if ((pathlen > 0) && (hdr->name[pathlen-1] == '/')) -- pathlen;
-        path = (char *) alloca (pathlen + longest + 2);
-        memcpy (path, hdr->name, pathlen);
-        path[pathlen++] = '/';
-
-        /*
-         * Total up length needed for all filenames in the directory.
-         */
-        path[pathlen] = 0;
-        hdr->size = 0;
-        for (i = 0; i < nents; i ++) {
-            de = names[i];
-            name = de->d_name;
-            if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
-                for (j = 0; j < 255; j ++) if (path[pathlen+j] != name[j]) break;
-                len = strlen (name + j) + 1;
-                hdr->size += len + 1;
-                memcpy (path + pathlen + j, name + j, len);
-            }
-        }
-
-        /*
-         * Write directory contents to saveset iff changed since the -since option value.
-         */
-        if (hdr->ctimns >= opt_since) {
-
-            /*
-             * Write header out with hdr->size = total of all those sizes with null terminators.
-             */
-            write_header (hdr);
-
-            /*
-             * Write all the null terminated filenames out as the contents of the directory.
-             * Each name is written as:
-             *   <number-of-beginning-chars-same-as-last><different-chars-on-end><null>
-             */
-            if (hdr->size > 0) {
-                buf = (char *) malloc (hdr->size);
-                if (buf == NULL) NOMEM ();
-                bbb = buf;
-                path[pathlen] = 0;
-                for (i = 0; i < nents; i ++) {
-                    de = names[i];
-                    name = de->d_name;
-                    if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
-                        for (j = 0; j < 255; j ++) if (path[pathlen+j] != name[j]) break;
-                        len = strlen (name + j) + 1;
-                        *(bbb ++) = j;
-                        memcpy (bbb, name + j, len);
-                        bbb += len;
-                        memcpy (path + pathlen + j, name + j, len);
-                    }
-                }
-                if ((ulong_t) (bbb - buf) != hdr->size) abort ();
-                write_queue (buf, bbb - buf, 1);
-            }
-        }
-
-        ok = true;
     }
+
+    /*
+     * Set up a buffer that will hold the directory path + the longest filename therein.
+     */
+    pathlen = strlen (hdr->name);
+    if ((pathlen > 0) && (hdr->name[pathlen-1] == '/')) -- pathlen;
+    path = (char *) alloca (pathlen + longest + 2);
+    memcpy (path, hdr->name, pathlen);
+    path[pathlen++] = '/';
+
+    /*
+     * Total up length needed for all filenames in the directory.
+     */
+    path[pathlen] = 0;
+    hdr->size = 0;
+    for (i = 0; i < nents; i ++) {
+        de = names[i];
+        name = de->d_name;
+        if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
+            for (j = 0; j < 255; j ++) if (path[pathlen+j] != name[j]) break;
+            len = strlen (name + j) + 1;
+            hdr->size += len + 1;
+            memcpy (path + pathlen + j, name + j, len);
+        }
+    }
+
+    /*
+     * Write directory contents to saveset iff changed since the -since option value.
+     */
+    if (hdr->ctimns >= opt_since) {
+
+        /*
+         * Write header out with hdr->size = total of all those sizes with null terminators.
+         */
+        write_header (hdr);
+
+        /*
+         * Write all the null terminated filenames out as the contents of the directory.
+         * Each name is written as:
+         *   <number-of-beginning-chars-same-as-last><different-chars-on-end><null>
+         */
+        if (hdr->size > 0) {
+            buf = (char *) malloc (hdr->size);
+            if (buf == NULL) NOMEM ();
+            bbb = buf;
+            path[pathlen] = 0;
+            for (i = 0; i < nents; i ++) {
+                de = names[i];
+                name = de->d_name;
+                if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
+                    for (j = 0; j < 255; j ++) if (path[pathlen+j] != name[j]) break;
+                    len = strlen (name + j) + 1;
+                    *(bbb ++) = j;
+                    memcpy (bbb, name + j, len);
+                    bbb += len;
+                    memcpy (path + pathlen + j, name + j, len);
+                }
+            }
+            if ((ulong_t) (bbb - buf) != hdr->size) abort ();
+            write_queue (buf, bbb - buf, 1);
+        }
+    }
+
+    ok = true;
 
     /*
      * Write the files in the directory out to the saveset.
@@ -824,10 +576,8 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
         de = names[i];
         name = de->d_name;
         if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
-            if (cpout) goto cpoutreq1;
             strcpy (path + pathlen, name);
             ok &= write_file (path, statbuf);
-            if (cpoutfile != NULL) goto cpoutreq2;
         }
         free (de);
     }
@@ -843,32 +593,6 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     }
 
     return ok;
-
-    /*
-     * Checkpoint requested.
-     * Write remaining names to do to the checkpoint file.
-     * If an inner call to write_file() detected cpout, we need to output the directory containing that file,
-     * starting with that file's name so reloading the stack frames will work right.
-     * Otherwise, this is the first frame to see cpout, so write the name of the next entry we were about to do.
-     */
-cpoutreq1:
-    if (open_cpout ()) {
-        fprintf (stderr, "ftbackup: checkpoint in %s entry %s\n", hdr->name, names[i]->d_name);
-    }
-cpoutreq2:
-    fprintf (cpoutfile, "{write_directory:{hdr:");
-    checkpointheader (cpoutfile, hdr);
-    fprintf (cpoutfile, ",names:[");
-    while (true) {
-        de = names[i];
-        writejsonstring (cpoutfile, de->d_name);
-        free (de);
-        if (++ i >= nents) break;
-        fputc (',', cpoutfile);
-    }
-    fprintf (cpoutfile, "],ok:%d}},", ok);
-    free (names);
-    return true;
 }
 
 /**
@@ -1011,7 +735,7 @@ void *FTBWriter::compr_thread ()
     Block *block;
     int dty, rc;
     ComprSlot slot;
-    uint32_t bs, i, len;
+    uint32_t bs, len;
     void *buf;
 
     block = NULL;
@@ -1020,68 +744,6 @@ void *FTBWriter::compr_thread ()
     if (xorgc > 0) {
         xorblocks = (Block **) calloc (xorgc, sizeof *xorblocks);
         if (xorblocks == NULL) NOMEM ();
-    }
-
-    /*
-     * If reloading stack from checkpoint file, reload our stuff from the checkpoint record.
-     */
-    if (cpin) {
-        JSon *ctf = cpinstack->poptop ();
-
-        pthread_mutex_lock (&cpinmutex);
-        cpincomprinit = true;
-        pthread_cond_broadcast (&cpincond);
-        pthread_mutex_unlock (&cpinmutex);
-
-        JSon *ctframe = ctf->find ("compr_thread");
-
-        /*
-         * Sequence number assigned to last data block written to saveset.
-         */
-        lastseqno = ctframe->find ("lastseqno")->getuinteger ();
-
-        /*
-         * XOR data for blocks written in this span if any.
-         */
-        if (xorgc > 0) {
-            JSon *jxors = ctframe->find ("xors");
-            for (i = 0; i < xorgc; i ++) {
-                JSon *jxorelem = jxors->poptop ();
-                uint32_t rawsize = jxorelem->getbinsize ();
-                if (rawsize != 0) {
-                    if (rawsize != bs) {
-                        fprintf (stderr, "ftbackup: saved xor size %u not block size %u\n", rawsize, bs);
-                        exit (EX_SSIO);
-                    }
-                    block = malloc_block ();
-                    memcpy (block, jxorelem->getbindata (), bs);
-                    xorblocks[i] = block;
-                }
-                delete jxorelem;
-            }
-            block = NULL;
-        }
-
-        /*
-         * Partially filled block, if any.
-         */
-        JSon *jblock = ctframe->find ("block");
-        if (jblock != NULL) {
-            block = malloc_block ();
-            uint32_t rawsize = jblock->getbinsize ();
-            if (rawsize >= bs) {
-                fprintf (stderr, "ftbackup: saved block size %u ge block size %u\n", rawsize, bs);
-                exit (EX_SSIO);
-            }
-            memcpy (block, jblock->getbindata (), rawsize);
-            zstrm.avail_out = bs - rawsize;
-            zstrm.next_out  = (Bytef *) block + rawsize;
-        }
-
-        /*
-         * Free it all off.
-         */
-        delete ctf;
     }
 
     while (true) {
@@ -1175,65 +837,18 @@ void *FTBWriter::compr_thread ()
     }
 
     /*
-     * If checkpointing out, save enough info to get back to same spot in output block.
+     * Normal (non-checkpointing) end, pad and queue final data block.
      */
-    if (cpout) {
-        open_cpout ();
+    if (zstrm.avail_out != 0) {
+        memset (zstrm.next_out, 0xFF, zstrm.avail_out);
+        queue_data_block (block);
+    }
 
-        /*
-         * Save sequence number of last data block we wrote out.
-         */
-        fprintf (cpoutfile, "{compr_thread:{lastseqno:%u", lastseqno);
-
-        /*
-         * If we have a partial block, save what there is of it in the checkpoint file.
-         */
-        if (block != NULL) {
-            fprintf (cpoutfile, ",block:#%u:", bs - zstrm.avail_out);
-            fwrite (block, bs - zstrm.avail_out, 1, cpoutfile);
-            free_block (block);
-        }
-
-        /*
-         * If we are doing XOR blocks, write any partial values to the checkpoint file.
-         */
-        if (xorgc > 0) {
-            fprintf (cpoutfile, ",xors:[");
-            for (i = 0; i < xorgc; i ++) {
-                if (i > 0) fputc (',', cpoutfile);
-                block = xorblocks[i];
-                if (block != NULL) {
-                    fprintf (cpoutfile, "#%u:", bs);
-                    fwrite (block, bs, 1, cpoutfile);
-                    free_block (block);
-                    xorblocks[i] = NULL;
-                } else {
-                    fprintf (cpoutfile, "#0:");
-                }
-            }
-            fprintf (cpoutfile, "]");
-        }
-
-        /*
-         * End of our checkpoint data.
-         */
-        fprintf (cpoutfile, "}},");
-    } else {
-
-        /*
-         * Normal (non-checkpointing) end, pad and queue final data block.
-         */
-        if (zstrm.avail_out != 0) {
-            memset (zstrm.next_out, 0xFF, zstrm.avail_out);
-            queue_data_block (block);
-        }
-
-        /*
-         * Flush final XOR blocks.
-         */
-        if ((xorgc > 0) && (xorsc > 0)) {
-            queue_xor_blocks ();
-        }
+    /*
+     * Flush final XOR blocks.
+     */
+    if ((xorgc > 0) && (xorsc > 0)) {
+        queue_xor_blocks ();
     }
 
     /*
@@ -1637,99 +1252,4 @@ T SlotQueue<T>::dequeue ()
     pthread_mutex_unlock (&mutex);
 
     return slot;
-}
-
-/**
- * @brief Trigger the write_saveset() stuff to checkpoint and exit quickly.
- * @param name = name of file to write checkpoint info to
- * @returns true: checkpoint file created
- *         false: failed to create file
- */
-bool FTBWriter::start_cpout (char const *name)
-{
-    cpoutfd = open (name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (cpoutfd < 0) return false;
-    cpoutname = name;
-    asm volatile ("xorl %%eax,%%eax ; cpuid" : : : "eax", "ebx", "ecx", "edx");
-    cpout = true;
-    return true;
-}
-
-/**
- * @brief Make sure the checkpoint file is open.
- */
-bool FTBWriter::open_cpout ()
-{
-    if (cpoutfile != NULL) return false;
-    asm volatile ("xorl %%eax,%%eax ; cpuid" : : : "eax", "ebx", "ecx", "edx");
-    cpoutfile = fdopen (cpoutfd, "w");
-    if (cpoutfile == NULL) {
-        fprintf (stderr, "ftbackup: fdopen(%s) error: %s\n", cpoutname, mystrerr (errno));
-        exit (EX_SSIO);
-    }
-    cpoutfd = -1;
-    fputc ('<', cpoutfile);
-    return true;
-}
-
-/**
- * @brief Write a file header to the checkpoint file in a json-like format.
- */
-static void checkpointheader (FILE *file, Header const *header)
-{
-    fprintf (file, "{mtimns:%llu,ctimns:%llu,atimns:%llu,size:%llu,fileno:%u,stmode:%u,ownuid:%u,owngid:%u,flags:%u,name:",
-            header->mtimns, header->ctimns, header->atimns, header->size, header->fileno, header->stmode, header->ownuid, header->owngid, header->flags);
-    writejsonstring (file, header->name);
-    fputc ('}', file);
-}
-
-/**
- * @brief Write a string to the checkpoint file in a json-like format.
- */
-static void writejsonstring (FILE *file, char const *str)
-{
-    char c;
-
-    fputc ('"', file);
-    while ((c = *(str ++)) != 0) {
-        switch (c) {
-            case '"':  fputs ("\\\"", file); break;
-            case '\\': fputs ("\\\\", file); break;
-            case '\n': fputs ("\\n",  file); break;
-            default:   fputc (c,      file); break;
-        }
-    }
-    fputc ('"', file);
-}
-
-/**
- * @brief Cause next call to write_saveset() to reload backup context
- *        from checkpoint file then attempt to finish backup.
- *        The given file will be deleted if the reload is successful.
- */
-void FTBWriter::start_cpin (char const *name)
-{
-    cpin = true;
-    cpinname = name;
-}
-
-/**
- * @brief Reload a header from a json-like node.
- *        But don't reload the name, verify that it matches.
- */
-static void reloadheader (Header *header, JSon *val)
-{
-    header->mtimns = val->find ("mtimns")->getuinteger ();
-    header->ctimns = val->find ("ctimns")->getuinteger ();
-    header->atimns = val->find ("atimns")->getuinteger ();
-    header->size   = val->find ("size")  ->getuinteger ();
-    header->fileno = val->find ("fileno")->getuinteger ();
-    header->stmode = val->find ("stmode")->getuinteger ();
-    header->ownuid = val->find ("ownuid")->getuinteger ();
-    header->owngid = val->find ("owngid")->getuinteger ();
-    header->flags  = val->find ("flags") ->getuinteger ();
-    if (strcmp (header->name, val->find ("name")->getstring ()->c_str ()) != 0) {
-        fprintf (stderr, "checkpoint name %s doesn't match on-disk name %s\n", val->find ("name")->getstring ()->c_str (), header->name);
-        exit (EX_SSIO);
-    }
 }

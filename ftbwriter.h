@@ -3,7 +3,6 @@
 #define _FTBWRITER_H
 
 #include "ftbackup.h"
-#include "json.h"
 
 #define SQ_NSLOTS 4
 
@@ -35,8 +34,6 @@ struct FTBWriter : FTBackup {
     FTBWriter ();
     ~FTBWriter ();
     int write_saveset (char const *ssname, char const *rootpath);
-    bool start_cpout (char const *name);
-    void start_cpin (char const *name);
 
 private:
     struct ComprSlot {
@@ -49,22 +46,12 @@ private:
 
     Block *volatile freeblocks;
     Block **xorblocks;
-    bool cpin;
-    bool cpincomprinit;
-    bool cpout;
     bool zisopen;
-    char const *cpinname;
-    char const *cpoutname;
     char const *ssbasename;
     char *sssegname;
     dev_t inodesdevno;
-    FILE *cpoutfile;
     ino_t *inodeslist;
-    int cpoutfd;
     int ssfd;
-    JSon *cpinstack;
-    pthread_cond_t cpincond;
-    pthread_mutex_t cpinmutex;
     time_t lastverbsec;
     uint32_t inodessize;
     uint32_t inodesused;
@@ -101,7 +88,6 @@ private:
     void *write_thread ();
     void write_ssblock (Block *block);
     void free_block (Block *block);
-    bool open_cpout ();
 };
 
 #endif
