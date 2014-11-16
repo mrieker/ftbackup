@@ -1895,12 +1895,15 @@ static CryptoPP::HashTransformation *gethashercontext (char const *name)
 
 /**
  * @brief Get hasher when none was specified on the command line.
- *        It is used in the non-encrypted case to hash the data for an integrity check.
+ * It is used in the non-encrypted case to hash the data for an integrity check.
  */
+#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
+#include "cryptopp562/md5.h"
+
 void FTBackup::maybesetdefaulthasher ()
 {
     if (hasher == NULL) {
-        hasher = new CryptoPP::SHA1 ();
+        hasher = new CryptoPP::Weak::MD5 ();
     }
 }
 
