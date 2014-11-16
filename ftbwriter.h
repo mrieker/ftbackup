@@ -50,8 +50,10 @@ private:
     char const *ssbasename;
     char *sssegname;
     dev_t inodesdevno;
+    FILE *noncefile;
     ino_t *inodeslist;
     int ssfd;
+    pthread_mutex_t freeblock_mutex;
     time_t lastverbsec;
     uint32_t inodessize;
     uint32_t inodesused;
@@ -79,11 +81,12 @@ private:
     static void *compr_thread_wrapper (void *ftbw);
     void *compr_thread ();
     void queue_data_block (Block *block);
-    void queue_xor_blocks ();
-    void queue_block (Block *block);
     Block *malloc_block ();
     static void *encr_thread_wrapper (void *ftbw);
     void *encr_thread ();
+    void xor_data_block (Block *block);
+    void hash_xor_blocks ();
+    void hash_block (Block *block);
     static void *write_thread_wrapper (void *ftbw);
     void *write_thread ();
     void write_ssblock (Block *block);

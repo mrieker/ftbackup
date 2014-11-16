@@ -29,8 +29,10 @@ FTBWriter::FTBWriter ()
     ssbasename    = NULL;
     sssegname     = NULL;
     inodesdevno   = 0;
+    noncefile     = NULL;
     inodeslist    = NULL;
     ssfd          = -1;
+    pthread_mutex_init (&freeblock_mutex, NULL);
     lastverbsec   = 0;
     inodessize    = 0;
     inodesused    = 0;
@@ -63,6 +65,10 @@ FTBWriter::~FTBWriter ()
             free (xorblocks[i]);
         }
         free (xorblocks);
+    }
+
+    if (noncefile != NULL) {
+        fclose (noncefile);
     }
 
     if (inodeslist != NULL) {
@@ -741,11 +747,6 @@ void *FTBWriter::compr_thread ()
     block = NULL;
     bs    = (1 << l2bs) - hashsize ();
 
-    if (xorgc > 0) {
-        xorblocks = (Block **) calloc (xorgc, sizeof *xorblocks);
-        if (xorblocks == NULL) NOMEM ();
-    }
-
     while (true) {
 
         /*
@@ -845,21 +846,9 @@ void *FTBWriter::compr_thread ()
     }
 
     /*
-     * Flush final XOR blocks.
-     */
-    if ((xorgc > 0) && (xorsc > 0)) {
-        queue_xor_blocks ();
-    }
-
-    /*
      * Tell writer thread to write final blocks out.
      */
-    queue_block (NULL);
-
-    if (xorblocks != NULL) {
-        free (xorblocks);
-        xorblocks = NULL;
-    }
+    queue_data_block (NULL);
 
     printthreadcputime ("compress");
 
@@ -871,6 +860,102 @@ void *FTBWriter::compr_thread ()
  * @param block = data block to queue
  */
 void FTBWriter::queue_data_block (Block *block)
+{
+    encrqueue.enqueue (block);
+}
+
+/**
+ * @brief Malloc a block.  They are page aligned so O_DIRECT will work.
+ */
+Block *FTBWriter::malloc_block ()
+{
+    Block *block;
+    int rc;
+    uint32_t bs;
+
+    pthread_mutex_lock (&freeblock_mutex);
+    block = freeblocks;
+    if (block != NULL) {
+        freeblocks = *(Block **)block;
+        pthread_mutex_unlock (&freeblock_mutex);
+    } else {
+        pthread_mutex_unlock (&freeblock_mutex);
+        bs = 1 << l2bs;
+        rc = posix_memalign ((void **)&block, PAGESIZE, bs);
+        if (rc != 0) NOMEM ();
+    }
+    memset (block, 0, sizeof *block);
+    return block;
+}
+
+/**
+ * @brief Dequeue data blocks from compr_thread(), xor, hash, encrypt, then queue to write_thread().
+ */
+void *FTBWriter::encr_thread_wrapper (void *ftbw)
+{
+    return ((FTBWriter *) ftbw)->encr_thread ();
+}
+void *FTBWriter::encr_thread ()
+{
+    Block *block;
+
+    /*
+     * Maybe set up array for XOR blocks.
+     */
+    if (xorgc > 0) {
+        xorblocks = (Block **) calloc (xorgc, sizeof *xorblocks);
+        if (xorblocks == NULL) NOMEM ();
+    }
+
+    /*
+     * Maybe get source of random numbers for the nonces.
+     */
+    if (cripter != NULL) {
+        noncefile = fopen ("/dev/urandom", "r");
+        if (noncefile == NULL) {
+            fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", mystrerr (errno));
+            abort ();
+        }
+    }
+
+    /*
+     * Process datablocks.
+     */
+    while ((block = encrqueue.dequeue ()) != NULL) {
+        xor_data_block (block);
+    }
+
+    /*
+     * Flush final XOR blocks.
+     */
+    if ((xorgc > 0) && (xorsc > 0)) {
+        hash_xor_blocks ();
+    }
+
+    if (xorblocks != NULL) {
+        free (xorblocks);
+        xorblocks = NULL;
+    }
+
+    if (noncefile != NULL) {
+        fclose (noncefile);
+        noncefile = NULL;
+    }
+
+    /*
+     * Tell write_thread() it can close the saveset and exit.
+     */
+    writequeue.enqueue (NULL);
+
+    printthreadcputime ("encrypt");
+
+    return NULL;
+}
+
+/**
+ * @brief Fill in data block header, XOR it into XOR blocks, hash, encrypt and queue for writing.
+ */
+void FTBWriter::xor_data_block (Block *block)
 {
     Block *xorblock;
     uint32_t bs, i, oldxorbc;
@@ -909,40 +994,39 @@ void FTBWriter::queue_data_block (Block *block)
         }
 
         /*
-         * Now that we have XOR'd the data, queue block for writing.
+         * Now that we have XOR'd the data, hash block and queue for writing.
          */
-        queue_block (block);
+        hash_block (block);
 
         /*
-         * If that was the last data block of the XOR span, queue XOR blocks for writing.
+         * If that was the last data block of the XOR span, hash XOR blocks and queue for writing.
          */
         if (lastseqno % (xorgc * xorsc) == 0) {
-            queue_xor_blocks ();
+            hash_xor_blocks ();
         }
     } else {
 
         /*
-         * No XOR blocks, queue data block for writing.
+         * No XOR blocks, hash data block and queue for writing.
          */
-        queue_block (block);
+        hash_block (block);
     }
 }
 
 /**
- * @brief Queue XOR blocks to be written to saveset file.
+ * @brief Hash XOR blocks and queue to be written to saveset file.
  */
-void FTBWriter::queue_xor_blocks ()
+void FTBWriter::hash_xor_blocks ()
 {
     Block *block;
-    uint32_t bs, i;
+    uint32_t i;
 
-    bs = (1 << l2bs) - hashsize ();
     for (i = 0; i < xorgc; i ++) {
         block = xorblocks[i];
         if (block != NULL) {
             memcpy (block->magic, BLOCK_MAGIC, 8);
             block->xorno = lastxorno + i + 1;
-            queue_block (block);
+            hash_block (block);
             xorblocks[i] = NULL;
         }
     }
@@ -950,163 +1034,80 @@ void FTBWriter::queue_xor_blocks ()
 }
 
 /**
- * @brief Queue block with header filled in to encr_thread().
- * @param block = block to queue or NULL for end-of-saveset marker
+ * @brief Maybe encrypt data, then hash it and queue for writing to saveset.
  */
-void FTBWriter::queue_block (Block *block)
+void FTBWriter::hash_block (Block *block)
 {
-    encrqueue.enqueue (block);
-}
-
-/**
- * @brief Malloc a block.  They are page aligned so O_DIRECT will work.
- */
-Block *FTBWriter::malloc_block ()
-{
-    Block *block;
-    int rc;
-    uint32_t bs;
-    uint64_t tmp;
-
-    asm volatile (
-        "   movq    %1,%0       \n"
-        "   .p2align 3          \n"
-        "1:                     \n"
-        "   testq   %0,%0       \n"
-        "   je      2f          \n"
-        "   movq    (%0),%2     \n"
-        "   lock                \n"
-        "   cmpxchgq %2,%1      \n"
-        "   jne     1b          \n"
-        "2:                     \n"
-        : "=a" (block), "+m" (freeblocks), "=r" (tmp)
-        : : "cc");
-
-    if (block == NULL) {
-        bs = 1 << l2bs;
-        rc = posix_memalign ((void **)&block, PAGESIZE, bs);
-        if (rc != 0) NOMEM ();
-    }
-    memset (block, 0, sizeof *block);
-    return block;
-}
-
-/**
- * @brief Dequeue blocks from compr_thread(), encrypt, then queue to write_thread().
- */
-void *FTBWriter::encr_thread_wrapper (void *ftbw)
-{
-    return ((FTBWriter *) ftbw)->encr_thread ();
-}
-void *FTBWriter::encr_thread ()
-{
-    Block *block;
-    FILE *noncefile;
     uint32_t bs, bsq, cbs, i;
     uint64_t *array;
 
-    cbs = (cripter == NULL) ? 0 : cripter->BlockSize ();
+    bs = (1U << l2bs) - hashsize ();
 
-    /*
-     * Make sure the 'i = 4' in the for loops below will work.
-     *
-     *  +-----------------------+
-     *  |  16 bytes of magic    |
-     *  |  ...and block number  |
-     *  +-----------------------+
-     *  |  16 bytes of nonce    |
-     *  |                       |
-     *  +-----------------------+
-     *  |  data to encrypt ...  | i = 4: quadword[4]
-     */
-    if (sizeof block->nonce != 16) abort ();
-    if (offsetof (Block, nonce) != 16) abort ();
+    if (cripter != NULL) {
 
-    /*
-     * Get source of random numbers for the nonces.
-     */
-    noncefile = NULL;
-    if (cbs > 0) {
-        noncefile = fopen ("/dev/urandom", "r");
-        if (noncefile == NULL) {
-            fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", mystrerr (errno));
+        /*
+         * Make sure the 'i = 4' in the for loops below will work.
+         *
+         *  +-----------------------+
+         *  |  16 bytes of magic    |
+         *  |  ...and block number  |
+         *  +-----------------------+
+         *  |  16 bytes of nonce    |
+         *  |                       |
+         *  +-----------------------+
+         *  |  data to encrypt ...  | i = 4: quadword[4]
+         */
+        if (sizeof block->nonce != 16) abort ();
+        if (offsetof (Block, nonce) != 16) abort ();
+
+        /*
+         * Fill in the nonce with a random number to salt the encryption.
+         */
+        cbs = cripter->BlockSize ();
+        if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
+            fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
             abort ();
         }
-    }
 
-    /*
-     * Get block size in bytes, excluding hash bytes at the end.
-     */
-    bs = (1 << l2bs) - hashsize ();
-
-    /*
-     * Get block size in quadwords, excluding hash quadwords at the end.
-     */
-    bsq = bs / 8;
-
-    /*
-     * Get a block to encrypt.
-     */
-    while ((block = encrqueue.dequeue ()) != NULL) {
-        if (cbs > 0) {
-
-            /*
-             * Fill in the nonce with a random number to salt the encryption.
-             */
-            if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
-                fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
-                abort ();
-            }
-
-            /*
-             * Use nonce for init vector and encrypt the block, excluding the hash,
-             * Leave magic number and everything else before nonce in plain text.
-             */
-            // CBC: enc[i] = encrypt ( clr[i] ^ enc[i-1] )
-            array = (uint64_t *) block;
-            switch (cbs) {
-                case 8: {
-                    for (i = 4; i < bsq; i ++) {
-                        array[i] ^= array[i-1];
-                        cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                    }
-                    break;
+        /*
+         * Use nonce for init vector and encrypt the block, excluding the hash,
+         * Leave magic number and everything else before nonce in plain text.
+         */
+        // CBC: enc[i] = encrypt ( clr[i] ^ enc[i-1] )
+        array = (uint64_t *) block;
+        if (bs % cbs != 0) abort ();
+        bsq = bs / 8;
+        switch (cbs) {
+            case 8: {
+                for (i = 4; i < bsq; i ++) {
+                    array[i] ^= array[i-1];
+                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
                 }
-                case 16: {
-                    for (i = 4; i < bsq; i += 2) {
-                        array[i+0] ^= array[i-2];
-                        array[i+1] ^= array[i-1];
-                        cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                    }
-                    break;
-                }
-                default: abort ();
+                break;
             }
+            case 16: {
+                for (i = 4; i < bsq; i += 2) {
+                    array[i+0] ^= array[i-2];
+                    array[i+1] ^= array[i-1];
+                    cripter->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
+                }
+                break;
+            }
+            default: abort ();
         }
-
-        /*
-         * Hash the encrypted data.
-         */
-        hasher->Update (hashinibuf, hashinilen);
-        hasher->Update ((uint8_t *)block, bs);
-        hasher->Final  ((uint8_t *)block + bs);
-
-        /*
-         * Queue the encrypted block for writing to the saveset.
-         */
-        writequeue.enqueue (block);
     }
 
     /*
-     * Tell write_thread() it can close the saveset and exit.
+     * Hash the encrypted data.
      */
-    writequeue.enqueue (NULL);
+    hasher->Update (hashinibuf, hashinilen);
+    hasher->Update ((uint8_t *)block, bs);
+    hasher->Final  ((uint8_t *)block + bs);
 
-    if (noncefile != NULL) fclose (noncefile);
-
-    printthreadcputime ("encrypt");
-
-    return NULL;
+    /*
+     * Queue the encrypted block for writing to the saveset.
+     */
+    writequeue.enqueue (block);
 }
 
 /**
@@ -1168,17 +1169,10 @@ void FTBWriter::write_ssblock (Block *block)
  */
 void FTBWriter::free_block (Block *block)
 {
-    asm volatile (
-        "   movq    %0,%%rax        \n"
-        "   .p2align 3              \n"
-        "1:                         \n"
-        "   movq    %%rax,(%1)      \n"
-        "   lock                    \n"
-        "   cmpxchgq %1,%0          \n"
-        "   jne     1b              \n"
-        : "+m" (freeblocks)
-        : "r" (block)
-        : "rax", "cc", "memory");
+    pthread_mutex_lock (&freeblock_mutex);
+    *(Block **) block = freeblocks;
+    freeblocks = block;
+    pthread_mutex_unlock (&freeblock_mutex);
 }
 
 /**
