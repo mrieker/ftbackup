@@ -1041,7 +1041,25 @@ void FTBWriter::hash_block (Block *block)
     uint32_t bs, bsq, cbs, i;
     uint64_t *array;
 
+    cbs = 0;
+    if (cipher != NULL) {
+
+        /*
+         * Fill in the nonce with a random number to salt the encryption.
+         */
+        cbs = cipher->BlockSize ();
+        if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
+            fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
+            abort ();
+        }
+    }
+
+    /*
+     * Hash the nonce and the data.
+     */
     bs = (1U << l2bs) - hashsize ();
+    hasher->Update ((uint8_t *)block, bs);
+    hasher->Final  ((uint8_t *)block + bs);
 
     if (cipher != NULL) {
 
@@ -1061,22 +1079,12 @@ void FTBWriter::hash_block (Block *block)
         if (offsetof (Block, nonce) != 16) abort ();
 
         /*
-         * Fill in the nonce with a random number to salt the encryption.
-         */
-        cbs = cipher->BlockSize ();
-        if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
-            fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
-            abort ();
-        }
-
-        /*
-         * Use nonce for init vector and encrypt the block, excluding the hash,
+         * Use nonce for init vector and encrypt the block, including the hash,
          * Leave magic number and everything else before nonce in plain text.
          */
         // CBC: enc[i] = encrypt ( clr[i] ^ enc[i-1] )
         array = (uint64_t *) block;
-        if (bs % cbs != 0) abort ();
-        bsq = bs / 8;
+        bsq = 1U << (l2bs - 3);
         switch (cbs) {
             case 8: {
                 for (i = 4; i < bsq; i ++) {
@@ -1096,13 +1104,6 @@ void FTBWriter::hash_block (Block *block)
             default: abort ();
         }
     }
-
-    /*
-     * Hash the encrypted data.
-     */
-    hasher->Update (hashinibuf, hashinilen);
-    hasher->Update ((uint8_t *)block, bs);
-    hasher->Final  ((uint8_t *)block + bs);
 
     /*
      * Queue the encrypted block for writing to the saveset.

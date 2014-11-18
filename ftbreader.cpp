@@ -1451,15 +1451,8 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
  */
 bool FTBReader::decrypt_block (Block *block, uint32_t bs)
 {
-    bool hashok;
     uint32_t i;
     uint64_t *array;
-
-    bs -= hashsize ();
-
-    hasher->Update (hashinibuf, hashinilen);
-    hasher->Update ((uint8_t *)block, bs);
-    hashok = hasher->Verify ((uint8_t *)block + bs);
 
     if (cipher != NULL) {
         array = (uint64_t *) block;
@@ -1484,7 +1477,9 @@ bool FTBReader::decrypt_block (Block *block, uint32_t bs)
         }
     }
 
-    return hashok;
+    bs -= hashsize ();
+    hasher->Update ((uint8_t *)block, bs);
+    return hasher->Verify ((uint8_t *)block + bs);
 }
 
 /**

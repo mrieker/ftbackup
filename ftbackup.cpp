@@ -1629,14 +1629,7 @@ bool FTBackup::blockbaseisvalid (Block *block)
  */
 uint32_t FTBackup::hashsize ()
 {
-    uint32_t cbs, hs;
-
-    hs = hasher->DigestSize ();
-    if (cipher != NULL) {
-        cbs = cipher->BlockSize ();
-        hs  = (hs + cbs - 1) & -cbs;
-    }
-    return hs;
+    return hasher->DigestSize ();
 }
 
 /**
