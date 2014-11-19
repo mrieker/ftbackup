@@ -1,0 +1,156 @@
+<HTML>
+    <HEAD><TITLE>Fault Tolerant Backup</TITLE></HEAD>
+    <BODY>
+        <P>
+            The <B>ftbackup</B> command provides for restoring archived files 
+            even in the presence of errors in the archive media.  This is 
+            achieved by recording the archive with redundancy blocks using an 
+            XOR scheme, and the integrity of each block of the archive is 
+            assured by a sequence number and a cryptographic hash of each block 
+            so we can be sure that no block is missing and the blocks are not 
+            corrupt.
+        </P>
+        <P>
+            The <B>ftbackup</B> command has several sub-commands:
+            <UL>
+                <LI><B>backup</B> - create an archive from an existing 
+                    directory tree</LI>
+                <LI><B>compare</B> - compare an existing archive to an existing 
+                    directory tree</LI>
+                <LI><B>diff</B> - comparee two existing directory trees</LI>
+                <LI><B>restore</B> - restore files saved in an existing archive 
+                    to a directory tree</LI>
+                <LI><B>version</B> - print out the <B>ftbackup</B> version
+                <LI><B>xorvfy</B> - verify the sequences, hashes and XOR blocks 
+                    of an archive</LI>
+            </UL>
+        </P>
+        <HR>
+        <H3>ftbackup backup <I>options</I> <I>saveset</I> <I>rootpath</I></H3>
+        <UL>
+            <LI><B><I>options</I></B>
+                <UL>
+                    <LI><B>-blocksize <I>bs</I></B> - sequence, hash, encrypt 
+                        and write <I>bs</I> bytes at a time.  Must be a power 
+                        of two in range 4096 to 1073741824.  Default is 
+                        32768.</LI>
+                    <LI><B>-encrypt [:<I>cipher</I>] [:<I>hash</I>] 
+                        <I>key</I></B> - encrypt the saveset.</LI>
+                    <LI><B>-idirect</B> - use O_DIRECT when reading files to be 
+                        archived.  Usually does not result in performance
+                        increase of the archiving itself, but avoids thrashing 
+                        the cache with blocks that will be accessed only 
+                        once.</LI>
+                    <LI><B>-noxor</B> - do not write any XOR redundancy 
+                        blocks.</LI>
+                    <LI><B>-odirect</B> - use O_DIRECT when writing the saveset
+                        so as to avoid thrashing the cache with blocks of the 
+                        saveset as they will be written only once and most 
+                        likely not read for quite some time.</LI>
+                    <LI><B>-osync</B> - use O_SYNC when writing the saveset so 
+                        as to see media write errors as the saveset is written.
+                        Implied by <B>-odirect</B>.</LI>
+                    <LI><B>-record <I>file</I></B> - write the time the backup 
+                        is started to the given file.  This file can then be 
+                        used by a <B>-since</B> option on a later <B>backup</B> 
+                        sub-command for doing incremental backups.</LI>
+                    <LI><B>-segsize <I>segsz</I></B> - instead of writing the 
+                        whole archive to a single file, break it up into a 
+                        series of smaller files, each of size <I>segsz</I> 
+                        bytes (the last one may be smaller).</LI>
+                    <LI><B>-since <I>file</I></B> - skip files with ctime 
+                        earlier than given in file.  Note that we use the date 
+                        written within the file, not the date of the file 
+                        itself.  Default is to process all files.</LI>
+                    <LI><B>-verbose</B> - print name of each file just before 
+                        it is processed.</LI>
+                    <LI><B>-verbsec <I>secs</I></B> - print name of file just 
+                        before it is processed, at <I>secs</I> intervals.</LI>
+                    <LI><B>-xor <I>xorsc</I>,<I>xorgc</I></B> - specify how 
+                        often to generate XOR redundancy blocks.  <I>xorsc</I> 
+                        says to write one XOR block per xorsc data blocks 
+                        (default is 31).  <I>xorgc</I> says to group xorgc XOR 
+                        blocks together for writing (default is 2).  Each is an 
+                        integer in range 1 to 255.</LI>
+                </UL>
+            </LI>
+            <LI><B><I>saveset</I></B> - name of archive to be written.</LI>
+            <LI><B><I>rootpath</I></B> - name of directory (or single file) to 
+                be archived.</LI>
+        </UL>
+        <HR>
+        <H3>Saveset format</H3>
+        <P>
+            Savesets consists of a series of fixed-length blocks whose size was 
+            given on the <B>backup</B> command line.  The final block is padded 
+            with 0xFF bytes as necessary to fill it.
+        </P>
+        <P>
+            There are data blocks and XOR blocks.  The data blocks are numbered 
+            starting at 1.  There will be <TT>xorgc * xorsc</TT> data blocks in 
+            a row followed by <TT>xorgc</TT> corresponding XOR blocks.  The XOR 
+            blocks are also numbered starting at 1.
+        </P>
+        <P>
+            For example, if <TT>xorgc = 2</TT> and <TT>xorsc = 31</TT> there 
+            will be 62 data blocks followed by 2 XOR blocks, repeated on to the 
+            end of the saveset.  Each set of 62 + 2 blocks is called a span.  
+            The final span of the saveset may be shorter than the other spans, 
+            but will include both XOR blocks.  In this example with <TT>xorgc 
+            = 2</TT>, the odd-numbered data blocks are XORd together to compose 
+            the odd-numbered XOR block at the end of the span, and the 
+            even-numbered data blocks are XORd together to compose the 
+            even-numbered XOR block at the end of the span.
+        </P>
+        <P>
+            Each block, either data or XOR, has these fields:
+            <UL>
+                <LI>8-byte magic number consiting of the 8 characters
+                    <TT>ftbackup</TT>.  Both data and XOR blocks have this 
+                    same magic number.
+                <LI>4-byte unsigned data block sequence number.  Data blocks 
+                    have their actual number.  XOR blocks have the XOR of the 
+                    corresponding data blocks sequence numbers.
+                <LI>4-byte unsigned XOR block sequence number.  Data blocks 
+                    have zero in this field.  XOR blocks have the XOR block 
+                    number.
+                <LI>16-byte encryption nonce.  Will be zeroes if not encrypted.
+                    Will have zeroes at the beginning followed by 8 nonce bytes 
+                    for 8-byte ciphers.  This field is not XORd for the XOR 
+                    blocks, but filled with its own random nonce.
+                <LI>content bytes filling most of the block.  XOR blocks 
+                    consist of the XOR of the corresponding data blocks.
+                <LI>16,20,32-byte integrity hash.  This field is not XORd for 
+                    the XOR blocks, but filled with its own computed hash.
+            </UL>
+        </P>
+        <P>
+            The hash field is the hash of all fields (including the nonce) 
+            except the hash field itself, just before encryption.  Encryption 
+            covers the content bytes and hash fields only, thus allowing 
+            checking for magic number and sequence numbers without knowing the 
+            key.  The integrity of the sequence numbers is assured as they are 
+            included in the encrypted hash.
+        </P>
+        <P>
+            The content field for data blocks consists of these sub-fields:
+            <UL>
+                <LI>4-byte byte offset, from very beginning of block, of first 
+                    file header within the block or zero if no file header in 
+                    the block.
+                <LI>1-byte log2 block size (same in all blocks)
+                <LI>1-byte xor block count (data blocks: zero; XOR blocks: 
+                    number of data blocks XORd for this block)
+                <LI>1-byte xor group count (same in all blocks)
+                <LI>1-byte xor span count (same in all blocks)
+                <LI>data bytes to fill the field
+            </UL>
+        </P>
+        <P>
+            The data bytes field alternates between file headers and file 
+            contents with no alignment or padding, overflowing from one data 
+            block to the next.  File headers are never compressed, and only the 
+            contents of regular files and directories are compressed.
+        </P>
+    </BODY>
+</HTML>
