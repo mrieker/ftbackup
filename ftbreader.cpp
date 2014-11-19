@@ -1440,6 +1440,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         rc = read (ssfd, (char *) buf + ofs, len - ofs);
         if (rc < 0) return rc;
         if (rc == 0) break;
+        pipepos += rc;
     }
     return ofs;
 }
