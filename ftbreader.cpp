@@ -382,6 +382,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
          */
         if (dstnamebuf != NULL) free (dstnamebuf);
         if (hdr != NULL) free (hdr);
+        free (lastfilenamefinished);
         close (ssfd);
         ssfd = -1;
         return ok ? EX_OK : EX_FILIO;

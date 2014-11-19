@@ -3,16 +3,9 @@
 #include "ftbwriter.h"
 
 static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val);
-
-static void printthreadcputime (char const *name)
-{
-    int rc;
-    struct timespec tp;
-
-    rc = clock_gettime (CLOCK_THREAD_CPUTIME_ID, &tp);
-    if (rc < 0) SYSERRNO (clock_gettime);
-    fprintf (stderr, "ftbackup: thread %s cpu time %lu.%.9lu\n", name, (ulong_t) tp.tv_sec, (ulong_t) tp.tv_nsec);
-}
+static uint64_t getruntime ();
+static void printthreadcputime (char const *name);
+static void printthreadruntime (char const *name, uint64_t runtime);
 
 FTBWriter::FTBWriter ()
 {
@@ -113,7 +106,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     bool ok;
     Header hdr;
     int rc;
-    pthread_t compr_thandl, encr_thandl, write_thandl;
+    pthread_t compr_thandl, write_thandl;
 
     maybesetdefaulthasher ();
 
@@ -144,14 +137,17 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     }
 
     /*
-     * Create compression, encryption and writing threads.
+     * Create compression and writing threads.
      */
     rc = pthread_create (&compr_thandl, NULL, compr_thread_wrapper, this);
     if (rc != 0) SYSERR (pthread_create, rc);
-    rc = pthread_create (&encr_thandl, NULL, encr_thread_wrapper, this);
-    if (rc != 0) SYSERR (pthread_create, rc);
     rc = pthread_create (&write_thandl, NULL, write_thread_wrapper, this);
     if (rc != 0) SYSERR (pthread_create, rc);
+
+    /*
+     * Start counting runtime for this thread.
+     */
+    rft_runtime = - getruntime ();
 
     /*
      * Process root path of files to back up.
@@ -169,14 +165,16 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
      */
     write_queue (NULL, 0, 0);
 
-    printthreadcputime ("readfiles");
+    /*
+     * Stop counting runtime for this thread and print it.
+     */
+    rft_runtime += getruntime ();
+    printthreadruntime ("read", rft_runtime);
 
     /*
-     * Wait for threads to finish.
+     * Wait for other threads to finish.
      */
     rc = pthread_join (compr_thandl, NULL);
-    if (rc != 0) SYSERR (pthread_join, rc);
-    rc = pthread_join (encr_thandl, NULL);
     if (rc != 0) SYSERR (pthread_join, rc);
     rc = pthread_join (write_thandl, NULL);
     if (rc != 0) SYSERR (pthread_join, rc);
@@ -710,7 +708,9 @@ void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
     slot.len = len;
     slot.dty = dty;
 
+    rft_runtime += getruntime ();
     comprqueue.enqueue (slot);
+    rft_runtime -= getruntime ();
 }
 
 /**
@@ -856,7 +856,7 @@ void *FTBWriter::compr_thread ()
 }
 
 /**
- * @brief Fill in data block header and queue block to encr_thread().
+ * @brief Fill in data block header and queue block to write_thread().
  * @param block = data block to queue
  */
 void FTBWriter::queue_data_block (Block *block)
@@ -889,22 +889,29 @@ Block *FTBWriter::malloc_block ()
 }
 
 /**
- * @brief Dequeue data blocks from compr_thread(), xor, hash, encrypt, then queue to write_thread().
+ * @brief Dequeue data blocks from compr_thread(), xor, hash, encrypt, then write to saveset.
  */
-void *FTBWriter::encr_thread_wrapper (void *ftbw)
+void *FTBWriter::write_thread_wrapper (void *ftbw)
 {
-    return ((FTBWriter *) ftbw)->encr_thread ();
+    return ((FTBWriter *) ftbw)->write_thread ();
 }
-void *FTBWriter::encr_thread ()
+void *FTBWriter::write_thread ()
 {
     Block *block;
+    uint32_t i;
+    uint64_t wst_runtime;
+
+    wst_runtime = - getruntime ();
 
     /*
-     * Maybe set up array for XOR blocks.
+     * Maybe set up array of XOR blocks.
      */
     if (xorgc > 0) {
-        xorblocks = (Block **) calloc (xorgc, sizeof *xorblocks);
+        xorblocks = (Block **) malloc (xorgc * sizeof *xorblocks);
         if (xorblocks == NULL) NOMEM ();
+        for (i = 0; i < xorgc; i ++) {
+            xorblocks[i] = malloc_block ();
+        }
     }
 
     /*
@@ -921,18 +928,23 @@ void *FTBWriter::encr_thread ()
     /*
      * Process datablocks.
      */
+    wst_runtime += getruntime ();
     while ((block = encrqueue.dequeue ()) != NULL) {
+        wst_runtime -= getruntime ();
         xor_data_block (block);
+        free_block (block);
+        wst_runtime += getruntime ();
     }
+    wst_runtime -= getruntime ();
 
     /*
      * Flush final XOR blocks.
      */
-    if ((xorgc > 0) && (xorsc > 0)) {
+    if (xorgc > 0) {
         hash_xor_blocks ();
-    }
-
-    if (xorblocks != NULL) {
+        for (i = 0; i < xorgc; i ++) {
+            free (xorblocks[i]);
+        }
         free (xorblocks);
         xorblocks = NULL;
     }
@@ -942,18 +954,14 @@ void *FTBWriter::encr_thread ()
         noncefile = NULL;
     }
 
-    /*
-     * Tell write_thread() it can close the saveset and exit.
-     */
-    writequeue.enqueue (NULL);
-
-    printthreadcputime ("encrypt");
+    wst_runtime += getruntime ();
+    printthreadruntime ("write", wst_runtime);
 
     return NULL;
 }
 
 /**
- * @brief Fill in data block header, XOR it into XOR blocks, hash, encrypt and queue for writing.
+ * @brief Fill in data block header, XOR it into XOR blocks, hash, encrypt and write to saveset.
  */
 void FTBWriter::xor_data_block (Block *block)
 {
@@ -974,32 +982,28 @@ void FTBWriter::xor_data_block (Block *block)
     /*
      * If we are generating XOR blocks, XOR the data block into the XOR block.
      */
-    if ((xorgc > 0) && (xorsc > 0)) {
+    if (xorgc > 0) {
 
         /*
          * XOR the data block into the XOR block.
-         * Malloc one if there isn't one there already.
          */
         i = (lastseqno - 1) % xorgc;
         xorblock = xorblocks[i];
-        if (xorblock == NULL) {
-            xorblock = malloc_block ();
+        oldxorbc = xorblock->xorbc;
+        if (oldxorbc == 0) {
             memcpy (xorblock, block, bs);
-            xorblock->xorbc = 1;
-            xorblocks[i] = xorblock;
         } else {
-            oldxorbc = xorblock->xorbc;
             xorblockdata (xorblock, block, bs);
-            xorblock->xorbc = ++ oldxorbc;
         }
+        xorblock->xorbc = ++ oldxorbc;
 
         /*
-         * Now that we have XOR'd the data, hash block and queue for writing.
+         * Now that we have XOR'd the data, hash block and write to saveset.
          */
         hash_block (block);
 
         /*
-         * If that was the last data block of the XOR span, hash XOR blocks and queue for writing.
+         * If that was the last data block of the XOR span, hash XOR blocks and write to saveset.
          */
         if (lastseqno % (xorgc * xorsc) == 0) {
             hash_xor_blocks ();
@@ -1007,14 +1011,14 @@ void FTBWriter::xor_data_block (Block *block)
     } else {
 
         /*
-         * No XOR blocks, hash data block and queue for writing.
+         * No XOR blocks, hash data block and write to saveset.
          */
         hash_block (block);
     }
 }
 
 /**
- * @brief Hash XOR blocks and queue to be written to saveset file.
+ * @brief Hash XOR blocks and write to saveset.
  */
 void FTBWriter::hash_xor_blocks ()
 {
@@ -1023,18 +1027,18 @@ void FTBWriter::hash_xor_blocks ()
 
     for (i = 0; i < xorgc; i ++) {
         block = xorblocks[i];
-        if (block != NULL) {
+        if (block->xorbc != 0) {
             memcpy (block->magic, BLOCK_MAGIC, 8);
             block->xorno = lastxorno + i + 1;
             hash_block (block);
-            xorblocks[i] = NULL;
+            block->xorbc = 0;
         }
     }
     lastxorno += xorgc;
 }
 
 /**
- * @brief Maybe encrypt data, then hash it and queue for writing to saveset.
+ * @brief Maybe encrypt data, then hash it and write to saveset.
  */
 void FTBWriter::hash_block (Block *block)
 {
@@ -1106,30 +1110,9 @@ void FTBWriter::hash_block (Block *block)
     }
 
     /*
-     * Queue the encrypted block for writing to the saveset.
+     * Write the possibly encrypted block to the saveset.
      */
-    writequeue.enqueue (block);
-}
-
-/**
- * @brief Dequeue blocks from compr_thread() or encr_thread() and write to saveset.
- */
-void *FTBWriter::write_thread_wrapper (void *ftbw)
-{
-    return ((FTBWriter *) ftbw)->write_thread ();
-}
-void *FTBWriter::write_thread ()
-{
-    Block *block;
-
-    while ((block = writequeue.dequeue ()) != NULL) {
-        write_ssblock (block);
-        free_block (block);
-    }
-
-    printthreadcputime ("writesaveset");
-
-    return NULL;
+    write_ssblock (block);
 }
 
 /**
@@ -1247,4 +1230,37 @@ T SlotQueue<T>::dequeue ()
     pthread_mutex_unlock (&mutex);
 
     return slot;
+}
+
+static uint64_t getruntime ()
+{
+    int rc;
+    struct timespec tp;
+
+    rc = clock_gettime (CLOCK_MONOTONIC, &tp);
+    if (rc < 0) SYSERRNO (clock_gettime);
+    return ((uint64_t) tp.tv_sec * 1000000000ULL) + tp.tv_nsec;
+}
+
+static void printthreadcputime (char const *name)
+{
+    int rc;
+    struct timespec tp;
+
+    rc = clock_gettime (CLOCK_THREAD_CPUTIME_ID, &tp);
+    if (rc < 0) SYSERRNO (clock_gettime);
+    fprintf (stderr, "ftbackup: thread %8s cpu time %6u.%.9u\n",
+            name, (uint32_t) tp.tv_sec, (uint32_t) tp.tv_nsec);
+}
+
+static void printthreadruntime (char const *name, uint64_t runtime)
+{
+    int rc;
+    struct timespec tp;
+
+    rc = clock_gettime (CLOCK_THREAD_CPUTIME_ID, &tp);
+    if (rc < 0) SYSERRNO (clock_gettime);
+    fprintf (stderr, "ftbackup: thread %8s cpu time %6u.%.9u, run time %6u.%.9u\n",
+            name, (uint32_t) tp.tv_sec, (uint32_t) tp.tv_nsec,
+            (uint32_t) (runtime / 1000000000U), (uint32_t) (runtime % 1000000000U));
 }

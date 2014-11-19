@@ -63,6 +63,7 @@ private:
     uint32_t thissegno;
     uint64_t byteswrittentoseg;
     uint64_t *inodesmtim;
+    uint64_t rft_runtime;
     z_stream zstrm;
 
     SlotQueue<ComprSlot> comprqueue;  // variable length data to be compressed and blocked
@@ -82,13 +83,11 @@ private:
     void *compr_thread ();
     void queue_data_block (Block *block);
     Block *malloc_block ();
-    static void *encr_thread_wrapper (void *ftbw);
-    void *encr_thread ();
+    static void *write_thread_wrapper (void *ftbw);
+    void *write_thread ();
     void xor_data_block (Block *block);
     void hash_xor_blocks ();
     void hash_block (Block *block);
-    static void *write_thread_wrapper (void *ftbw);
-    void *write_thread ();
     void write_ssblock (Block *block);
     void free_block (Block *block);
 };
