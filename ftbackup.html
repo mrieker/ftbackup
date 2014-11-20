@@ -13,15 +13,15 @@
         <P>
             The <B>ftbackup</B> command has several sub-commands:
             <UL>
-                <LI><B>backup</B> - create an archive from an existing 
+                <LI><B>backup</B> : create an archive from an existing 
                     directory tree</LI>
-                <LI><B>compare</B> - compare an existing archive to an existing 
+                <LI><B>compare</B> : compare an existing archive to an existing 
                     directory tree</LI>
-                <LI><B>diff</B> - comparee two existing directory trees</LI>
-                <LI><B>restore</B> - restore files saved in an existing archive 
+                <LI><B>diff</B> : comparee two existing directory trees</LI>
+                <LI><B>restore</B> : restore files saved in an existing archive 
                     to a directory tree</LI>
-                <LI><B>version</B> - print out the <B>ftbackup</B> version
-                <LI><B>xorvfy</B> - verify the sequences, hashes and XOR blocks 
+                <LI><B>version</B> : print out the <B>ftbackup</B> version
+                <LI><B>xorvfy</B> : verify the sequences, hashes and XOR blocks 
                     of an archive</LI>
             </UL>
         </P>
@@ -30,43 +30,67 @@
         <UL>
             <LI><B><I>options</I></B>
                 <UL>
-                    <LI><B>-blocksize <I>bs</I></B> - sequence, hash, encrypt 
+                    <LI><B>-blocksize <I>bs</I></B> : sequence, hash, encrypt 
                         and write <I>bs</I> bytes at a time.  Must be a power 
                         of two in range 4096 to 1073741824.  Default is 
                         32768.</LI>
                     <LI><B>-encrypt [:<I>cipher</I>] [:<I>hash</I>] 
-                        <I>key</I></B> - encrypt the saveset.</LI>
-                    <LI><B>-idirect</B> - use O_DIRECT when reading files to be 
+                        <I>key</I></B> : encrypt the saveset.
+                        <UL>
+                            <LI><B><I>cipher</I></B> : <TT>AES Blowfish 
+                                Camellia CAST128 CAST256 DES DES_EDE2 DES_EDE3 
+                                DES_XEX3 GOST IDEA MARS RC2 RC5 RC6 Rijndael 
+                                SAFER_K SAFER_SK SEED Serpent SHARK SKIPJACK 
+                                Square TEA Twofish XTEA</TT>, (<TT>AES</TT> and 
+                                <TT>Rijndael</TT> are synonymous), default 
+                                <TT>AES</TT></LI>
+                            <LI><B><I>hash</I></B> : <TT>RIPEMD160 RIPEMD320 
+                                RIPEMD128 RIPEMD256 SHA1 SHA224 SHA256 SHA384 
+                                SHA512 Tiger Whirlpool</TT>, default 
+                                <TT>SHA1</TT></LI>
+                            <LI><B><I>key</I></B> : one of these forms:
+                                <UL>
+                                    <LI><B>- <I>(single hyphen)</I></B> : 
+                                        prompt at stdin</LI>
+                                    <LI><B>@<I>filename</I></B> : read from 
+                                        first line of file</LI>
+                                    <LI><I>else</I> : the given literal 
+                                        string</LI>
+                                </UL>
+                            </LI>
+                        </UL>
+                    </LI>
+                    <LI><B>-idirect</B> : use O_DIRECT when reading files to be 
                         archived.  Usually does not result in performance
                         increase of the archiving itself, but avoids thrashing 
                         the cache with blocks that will be accessed only 
                         once.</LI>
-                    <LI><B>-noxor</B> - do not write any XOR redundancy 
+                    <LI><B>-noxor</B> : do not write any XOR redundancy 
                         blocks.</LI>
-                    <LI><B>-odirect</B> - use O_DIRECT when writing the saveset
+                    <LI><B>-odirect</B> : use O_DIRECT when writing the saveset
                         so as to avoid thrashing the cache with blocks of the 
                         saveset as they will be written only once and most 
                         likely not read for quite some time.</LI>
-                    <LI><B>-osync</B> - use O_SYNC when writing the saveset so 
+                    <LI><B>-osync</B> : use O_SYNC when writing the saveset so 
                         as to see media write errors as the saveset is written.
                         Implied by <B>-odirect</B>.</LI>
-                    <LI><B>-record <I>file</I></B> - write the time the backup 
+                    <LI><B>-record <I>file</I></B> : write the time the backup 
                         is started to the given file.  This file can then be 
                         used by a <B>-since</B> option on a later <B>backup</B> 
                         sub-command for doing incremental backups.</LI>
-                    <LI><B>-segsize <I>segsz</I></B> - instead of writing the 
+                    <LI><B>-segsize <I>segsz</I></B> : instead of writing the 
                         whole archive to a single file, break it up into a 
                         series of smaller files, each of size <I>segsz</I> 
                         bytes (the last one may be smaller).</LI>
-                    <LI><B>-since <I>file</I></B> - skip files with ctime 
+                    <LI><B>-since <I>file</I></B> : skip files with ctime 
                         earlier than given in file.  Note that we use the date 
                         written within the file, not the date of the file 
                         itself.  Default is to process all files.</LI>
-                    <LI><B>-verbose</B> - print name of each file just before 
+                    <LI><B>-verbose</B> : print name of each file just before 
                         it is processed.</LI>
-                    <LI><B>-verbsec <I>secs</I></B> - print name of file just 
+                    <LI><B>-verbsec <I>secs</I></B> : print name of file just 
                         before it is processed, at <I>secs</I> intervals.</LI>
-                    <LI><B>-xor <I>xorsc</I>,<I>xorgc</I></B> - specify how 
+                    <LI><B>-xor <I>xorsc</I>,<I>xorgc</I></B> : specify how 
                         often to generate XOR redundancy blocks.  <I>xorsc</I> 
                         says to write one XOR block per xorsc data blocks 
                         (default is 31).  <I>xorgc</I> says to group xorgc XOR 
@@ -74,9 +98,116 @@
                         integer in range 1 to 255.</LI>
                 </UL>
             </LI>
-            <LI><B><I>saveset</I></B> - name of archive to be written.</LI>
-            <LI><B><I>rootpath</I></B> - name of directory (or single file) to 
-                be archived.</LI>
+            <LI><B><I>saveset</I></B> : name of archive to be written.</LI>
+            <LI><B><I>rootpath</I></B> : root of directory tree to be 
+                archived.  The entire contents of the tree will be archived 
+                except:
+                <UL>
+                    <LI>subdirectory contents currently being used as a mount 
+                        point (the subdirectory is backed up as an empty 
+                        directory)</LI>
+                    <LI>other contents of a directory containing a file named 
+                        <TT>~SKIPDIR.FTB</TT> (the directory is backed up as a 
+                        directory containing only the <TT>~SKIPDIR.FTB</TT> 
+                        file)</LI>
+                    <LI>files with ctime earlier than given by <B>-since</B>
+                </UL>
+            </LI>
+        </UL>
+        <HR>
+        <H3>ftbackup compare <I>options</I> <I>saveset</I> <I>srcprefix</I>
+            <I>dstprefix</I></H3>
+        <UL>
+            <LI><B><I>options</I></B>
+                <UL>
+                    <LI><B>-decrypt [:<I>cipher</I>] [:<I>hash</I>] 
+                        <I>key</I></B> : as given to <B>-encrypt</B> when 
+                        saveset written.</LI>
+                    <LI><B>-incremental</B> : when comparing a directory to a 
+                        filesystem with existing contents in that directory, 
+                        existing files not present in the directory 
+                        being restored will elicit an compare error.</LI>
+                    <LI><B>-simrderrs <I>prob</I></B> : simulate read error 
+                        with probability of 1 out of <I>prob</I> blocks.</LI>
+                    <LI><B>-verbose</B> : print name of each file just before 
+                        it is processed.</LI>
+                    <LI><B>-verbsec <I>secs</I></B> : print name of file just 
+                        before it is processed, at <I>secs</I> intervals.</LI>
+                </UL>
+            </LI>
+            <LI><B><I>saveset</I></B> : name of archive to be compared.</LI>
+            <LI><B><I>srcprefix</I></B> : select files from the saveset who's 
+                name at the time of backup begins with this string.  Use 
+                <TT>''</TT> to select all files.</LI>
+            <LI><B><I>dstprefix</I></B> : string to replace <I>srcprefix</I> in 
+                the filename within the saveset to determine file on disk to 
+                compare the file from the saveset to.  Use same as 
+                <I>srcprefix</I> to compare to identical file.</LI>
+        </UL>
+        <HR>
+        <H3>ftbackup diff <I>path1</I> <I>path2</I></H3>
+        <UL>
+            <LI><B><I>path1</I></B> : path of one directory to compare</LI>
+            <LI><B><I>path2</I></B> : path of other directory to compare to</LI>
+        </UL>
+        <HR>
+        <H3>ftbackup list <I>options</I> <I>saveset</I></H3>
+        <UL>
+            <LI><B><I>options</I></B>
+                <UL>
+                    <LI><B>-decrypt [:<I>cipher</I>] [:<I>hash</I>] 
+                        <I>key</I></B> : as given to <B>-encrypt</B> when 
+                        saveset written.</LI>
+                    <LI><B>-simrderrs <I>prob</I></B> : simulate read error 
+                        with probability of 1 out of <I>prob</I> blocks.</LI>
+                </UL>
+            </LI>
+            <LI><B><I>saveset</I></B> : name of archive to be listed.</LI>
+        </UL>
+        <HR>
+        <H3>ftbackup restore <I>options</I> <I>saveset</I> <I>srcprefix</I>
+            <I>dstprefix</I></H3>
+        <UL>
+            <LI><B><I>options</I></B>
+                <UL>
+                    <LI><B>-decrypt [:<I>cipher</I>] [:<I>hash</I>] 
+                        <I>key</I></B> : as given to <B>-encrypt</B> when 
+                        saveset written.</LI>
+                    <LI><B>-incremental</B> : when restoring a directory to an 
+                        existing filesystem with existing contents in that 
+                        directory, existing files not present in the directory 
+                        being restored will be deleted.</LI>
+                    <LI><B>-overwrite</B> : overwrite an existing file with the 
+                        file from the saveset.  Otherwise, an error message is 
+                        printed and the existing file remains as is.</LI>
+                    <LI><B>-simrderrs <I>prob</I></B> : simulate read error 
+                        with probability of 1 out of <I>prob</I> blocks.</LI>
+                    <LI><B>-verbose</B> : print name of each file just before 
+                        it is processed.</LI>
+                    <LI><B>-verbsec <I>secs</I></B> : print name of file just 
+                        before it is processed, at <I>secs</I> intervals.</LI>
+                </UL>
+            </LI>
+            <LI><B><I>saveset</I></B> : name of archive to be compared.</LI>
+            <LI><B><I>srcprefix</I></B> : select files from the saveset who's 
+                name at the time of backup begins with this string.  Use 
+                <TT>''</TT> to select all files.</LI>
+            <LI><B><I>dstprefix</I></B> : string to replace <I>srcprefix</I> in 
+                the filename within the saveset to determine file on disk to 
+                compare the file from the saveset to.  Use same as 
+                <I>srcprefix</I> to compare to identical file.</LI>
+        </UL>
+        <HR>
+        <H3>ftbackup xorvfy <I>options</I> <I>saveset</I></H3>
+        <UL>
+            <LI><B><I>options</I></B>
+                <UL>
+                    <LI><B>-decrypt [:<I>cipher</I>] [:<I>hash</I>] 
+                        <I>key</I></B> : as given to <B>-encrypt</B> when 
+                        saveset written.</LI>
+                </UL>
+            </LI>
+            <LI><B><I>saveset</I></B> : name of archive to be verified.</LI>
         </UL>
         <HR>
         <H3>Saveset format</H3>

@@ -439,12 +439,13 @@ struct CompFSAccess : IFSAccess {
 
 static int cmd_compare (int argc, char **argv)
 {
-    char const *srcprefix;
+    char const *dstprefix, *srcprefix;
     char *p, *ssname;
     CompFSAccess compFSAccess = CompFSAccess ();
     FTBComparer ftbcomparer = FTBComparer ();
     int i;
 
+    dstprefix = NULL;
     srcprefix = NULL;
     ssname    = NULL;
     for (i = 0; ++ i < argc;) {
@@ -488,21 +489,26 @@ static int cmd_compare (int argc, char **argv)
             srcprefix = argv[i];
             continue;
         }
+        if (dstprefix == NULL) {
+            dstprefix = argv[i];
+            continue;
+        }
         fprintf (stderr, "ftbackup: unknown argument %s\n", argv[i]);
         goto usage;
     }
-    if (srcprefix == NULL) {
+    if (dstprefix == NULL) {
         fprintf (stderr, "ftbackup: missing required arguments\n");
         goto usage;
     }
     ftbcomparer.tfs = &compFSAccess;
-    return ftbcomparer.read_saveset (ssname, srcprefix, srcprefix);
+    return ftbcomparer.read_saveset (ssname, srcprefix, dstprefix);
 
 usage:
-    fprintf (stderr, "usage: ftbackup compare [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix>\n");
+    fprintf (stderr, "usage: ftbackup compare [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix> <dstprefix>\n");
     usagecipherargs ("decrypt");
     fprintf (stderr, "        <srcprefix> = compare only files beginning with this prefix\n");
     fprintf (stderr, "                      use '' to compare all files\n");
+    fprintf (stderr, "        <dstprefix> = what to replace <srcprefix> part of filename with to construct output filename\n");
     return EX_CMD;
 }
 
