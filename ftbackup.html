@@ -1,8 +1,9 @@
 <HTML>
     <HEAD><TITLE>Fault Tolerant Backup</TITLE></HEAD>
     <BODY>
+        <H2>ftbackup - Fault Tolerant Backup</H2>
         <P>
-            The <B>ftbackup</B> command provides for restoring archived files 
+            The <B>ftbackup</B> utility provides for restoring archived files 
             even in the presence of errors in the archive media.  This is 
             achieved by recording the archive with redundancy blocks using an 
             XOR scheme, and the integrity of each block of the archive is 
@@ -17,9 +18,10 @@
                     directory tree</LI>
                 <LI><B>compare</B> : compare an existing archive to an existing 
                     directory tree</LI>
-                <LI><B>diff</B> : comparee two existing directory trees</LI>
-                <LI><B>restore</B> : restore files saved in an existing archive 
-                    to a directory tree</LI>
+                <LI><B>diff</B> : compare two existing directory trees</LI>
+                <LI><B>list</B> : list files saved in an archive</LI>
+                <LI><B>restore</B> : restore files saved in an archive to a 
+                    directory tree</LI>
                 <LI><B>version</B> : print out the <B>ftbackup</B> version
                 <LI><B>xorvfy</B> : verify the sequences, hashes and XOR blocks 
                     of an archive</LI>
@@ -32,8 +34,8 @@
                 <UL>
                     <LI><B>-blocksize <I>bs</I></B> : sequence, hash, encrypt 
                         and write <I>bs</I> bytes at a time.  Must be a power 
-                        of two in range 4096 to 1073741824.  Default is 
-                        32768.</LI>
+                        of two in range 4096 (4K) to 1073741824 (1G).  Default 
+                        is 32768 (32K).</LI>
                     <LI><B>-encrypt [:<I>cipher</I>] [:<I>hash</I>] 
                         <I>key</I></B> : encrypt the saveset.
                         <UL>
@@ -81,7 +83,14 @@
                     <LI><B>-segsize <I>segsz</I></B> : instead of writing the 
                         whole archive to a single file, break it up into a 
                         series of smaller files, each of size <I>segsz</I> 
-                        bytes (the last one may be smaller).</LI>
+                        bytes (the last one may be smaller).  The files are 
+                        named <I>savesetnnnnnn</I> where <I>nnnnnn</I> are 
+                        sequential numbers starting at <TT>000001</TT>.
+                        <UL>
+                            <LI>The given segment size must be a multiple of 
+                                the span size.
+                            <LI>spansize = blocksize * (xorsc + 1) * xorgc
+                        </UL></LI>
                     <LI><B>-since <I>file</I></B> : skip files with ctime 
                         earlier than given in file.  Note that we use the date 
                         written within the file, not the date of the file 
@@ -99,9 +108,8 @@
                 </UL>
             </LI>
             <LI><B><I>saveset</I></B> : name of archive to be written.</LI>
-            <LI><B><I>rootpath</I></B> : root of directory tree to be 
-                archived.  The entire contents of the tree will be archived 
-                except:
+            <LI><B><I>rootpath</I></B> : root of tree to be archived.  The 
+                entire contents of the tree will be archived except:
                 <UL>
                     <LI>subdirectory contents currently being used as a mount 
                         point (the subdirectory is backed up as an empty 
@@ -111,6 +119,44 @@
                         directory containing only the <TT>~SKIPDIR.FTB</TT> 
                         file)</LI>
                     <LI>files with ctime earlier than given by <B>-since</B>
+                </UL>
+            </LI>
+        </UL>
+        Example:
+        <UL>
+            <LI><TT>ftbackup backup -blocksize 65536 -encrypt :idea @backup.key 
+                -idirect -odirect -record /var/log/root_disk.reco -segsize 
+                $((1024*1024*1024)) -verbsec 30 -xor 63,2 /sdd1/root.full.ftb/ 
+                /</TT>
+                <UL>
+                    <LI>Backs up the root filesystem (<TT>/</TT>) to a series 
+                        of 1GB files (<TT>-segsize $((1024*1024*1024))</TT>) 
+                        named <TT>/sdd1/root.full.ftb/000001</TT>, 
+                        <TT>/sdd1/root.full.ftb/000002</TT>, 
+                        <TT>/sdd1/root.full.ftb/000003</TT>, etc.</LI>
+                    <LI>Files are read from the root filesystem using O_DIRECT 
+                        (<TT>-idirect</TT>) so as not to fill up the cache with 
+                        blocks from files that will probably not be read until 
+                        the next full backup.</LI>
+                    <LI>The saveset files are encrypted using IDEA and SHA1 
+                        with the key given in file <TT>backup.key</TT>.</LI>
+                    <LI>Record the date/time the backup was started in 
+                        <TT>/var/log/root_disk.reco</TT> so that an incremental 
+                        backup can be done later using <TT>-since 
+                        /var/log/root_disk.reco</TT>.</LI>
+                    <LI>The saveset is written in 64KB byte blocks 
+                        (<TT>-blocksize 65536</TT>).  126 data blocks are 
+                        written followed by 2 XOR blocks (<TT>-xor 
+                        63,2</TT>).  Thus the span size is 64KB * 64 * 2 = 
+                        8MB, so there can't be more than one sequence of up to 
+                        two consecutive corrupted blocks in every 8MB of the 
+                        saveset.</LI>
+                    <LI>The saveset is written using O_DIRECT 
+                        (<TT>-odirect</TT>) so as not to fill up the cache with 
+                        blocks that will probably not be read until a restore 
+                        is needed.</LI>
+                    <LI>The name of the file about to be processed is printed 
+                        every 30 seconds (<TT>-verbsec 30</TT>).</LI>
                 </UL>
             </LI>
         </UL>
@@ -196,6 +242,25 @@
                 the filename within the saveset to determine file on disk to 
                 compare the file from the saveset to.  Use same as 
                 <I>srcprefix</I> to compare to identical file.</LI>
+        </UL>
+        Example:
+        <UL>
+            <LI><TT>ftbackup restore -decrypt :idea @backup.key -verbose 
+                root.full.ftb/ /etc/ /restored_etc/</TT>
+                <UL>
+                    <LI>Restore from the encrypted <TT>root.full.ftb/</TT> 
+                        saveset (presumably segmented files in that 
+                        directory named <TT>root.full.ftb/000001</TT>, 
+                        <TT>root.full.ftb/000002</TT>, etc).</LI>
+                    <LI>Print the name of each file just before restoring it 
+                        (<TT>-verbose</TT>).</LI>
+                    <LI>Restore only files named beginning with, when saved, 
+                        <TT>/etc/</TT>.  Splice out the <TT>/etc/</TT> and 
+                        replace it with <TT>/restored_etc/</TT>, eg, 
+                        <TT>/etc/hosts</TT> gets restored to 
+                        <TT>/restored_etc/hosts</TT>.</LI>
+                </UL>
+            </LI>
         </UL>
         <HR>
         <H3>ftbackup xorvfy <I>options</I> <I>saveset</I></H3>
