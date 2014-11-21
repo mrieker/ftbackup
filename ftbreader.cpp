@@ -133,16 +133,16 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
         ssfd = STDIN_FILENO;
     } else {
 
-        // if name ends in .<exactly-SEGNODECDIGS-digits> the digits are the starting segment number
+        // if name ends in <exactly-SEGNODECDIGS-digits> the digits are the starting segment number
         // and everything before that is the base name
         hassegno  = 0xFFFFFFFFU;
         ssnamelen = strlen (ssname);
-        if ((ssnamelen > SEGNODECDIGS) && (ssname[ssnamelen-SEGNODECDIGS-1] == '.')) {
+        if (ssnamelen > SEGNODECDIGS) {
             hassegno = strtoul (ssname + ssnamelen - SEGNODECDIGS, &p, 10);
             if (*p != 0) hassegno = 0xFFFFFFFFU;
         }
 
-        // if it has .<digits>, the user is giving us an explicit segment to start at
+        // if it has <digits>, the user is giving us an explicit segment to start at
         // so we must be able to open that exact file
         if (hassegno != 0xFFFFFFFFU) {
 
@@ -153,10 +153,10 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
             sssegname = (char *) alloca (ssnamelen + 16);
             strcpy (sssegname, ssname);
 
-            // the base name is everything before the .<digits>
-            p = (char *) alloca (ssnamelen - SEGNODECDIGS);
-            memcpy (p, ssname, ssnamelen - SEGNODECDIGS - 1);
-            p[ssnamelen-SEGNODECDIGS-1] = 0;
+            // the base name is everything before the <digits>
+            p = (char *) alloca (ssnamelen - SEGNODECDIGS + 1);
+            memcpy (p, ssname, ssnamelen - SEGNODECDIGS);
+            p[ssnamelen-SEGNODECDIGS] = 0;
             ssbasename = p;
 
             // we must be able to open that specific file as given by the user
@@ -167,18 +167,27 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
             }
         } else {
 
-            // if no .<digits>, the user could be saying to open that exact file
+            // if no <digits>, the user could be saying to open that exact file
             // or for us to find the first segment file starting with that name
             ssfd = open (ssname, O_RDONLY);
+            if (ssfd >= 0) {
+                if (fstat (ssfd, &ssstat) < 0) SYSERRNO (fstat);
+                if (S_ISDIR (ssstat.st_mode)) {
+                    close (ssfd);
+                    ssfd  = -1;
+                    errno = EISDIR;
+                }
+            }
+
             if (ssfd < 0) {
 
                 // if something like permissions error, print error and die
-                if (errno != ENOENT) {
+                if ((errno != EISDIR) && (errno != ENOENT)) {
                     fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, mystrerr (errno));
                     return EX_SSIO;
                 }
 
-                // the given name is not found, try opening <givenname>.<lowest-segno>
+                // the given name is not found, try opening <givenname><lowest-segno>
                 thissegno  = findnextsegno (ssname, 0);
                 if (thissegno == 0) {
                     fprintf (stderr, "ftbackup: open(%s) error: %s\n", ssname, mystrerr (ENOENT));
