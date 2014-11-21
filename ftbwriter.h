@@ -39,12 +39,12 @@ private:
     struct ComprSlot {
         void    *buf;   // address of data to write
         uint32_t len;   // length of data to write
-        int      dty;   // -1: file header to be left uncompressed
-                        //  0: data to be left uncompressed
-                        //  1: data to be compressed
+        int      dty;   // -1: file header to be left uncompressed, the free ()
+                        //  0: data to be left uncompressed, then free ()
+                        //  1: data to be compressed, then free ()
+                        //  2: data to be compressed, then frqueue.enqueue ()
     };
 
-    Block *volatile freeblocks;
     Block **xorblocks;
     bool zisopen;
     char const *ssbasename;
@@ -53,7 +53,6 @@ private:
     FILE *noncefile;
     ino_t *inodeslist;
     int ssfd;
-    pthread_mutex_t freeblock_mutex;
     time_t lastverbsec;
     uint32_t inodessize;
     uint32_t inodesused;
@@ -66,9 +65,10 @@ private:
     uint64_t rft_runtime;
     z_stream zstrm;
 
+    SlotQueue<void *>    frbufqueue;  // free buffers for reading files
     SlotQueue<ComprSlot> comprqueue;  // variable length data to be compressed and blocked
-    SlotQueue<Block *> encrqueue;     // blocks to be encrypted
-    SlotQueue<Block *> writequeue;    // blocks to be written to saveset
+    SlotQueue<Block *>   frblkqueue;  // free blocks for writing to saveset
+    SlotQueue<Block *>   writequeue;  // blocks to be written to saveset
 
     bool write_file (char const *path, struct stat const *dirstat);
     bool write_regular (Header *hdr, struct stat const *dirstat);
@@ -81,10 +81,9 @@ private:
     void write_queue (void *buf, uint32_t len, int dty);
     static void *compr_thread_wrapper (void *ftbw);
     void *compr_thread ();
-    void queue_data_block (Block *block);
-    Block *malloc_block ();
     static void *write_thread_wrapper (void *ftbw);
     void *write_thread ();
+    Block *malloc_block ();
     void xor_data_block (Block *block);
     void hash_xor_blocks ();
     void hash_block (Block *block);

@@ -16,7 +16,6 @@ FTBWriter::FTBWriter ()
     opt_segsize   = 0;
     opt_since     = 0;
 
-    freeblocks    = NULL;
     xorblocks     = NULL;
     zisopen       = false;
     ssbasename    = NULL;
@@ -25,7 +24,6 @@ FTBWriter::FTBWriter ()
     noncefile     = NULL;
     inodeslist    = NULL;
     ssfd          = -1;
-    pthread_mutex_init (&freeblock_mutex, NULL);
     lastverbsec   = 0;
     inodessize    = 0;
     inodesused    = 0;
@@ -37,8 +35,9 @@ FTBWriter::FTBWriter ()
     inodesmtim    = NULL;
     memset (&zstrm, 0, sizeof zstrm);
 
+    frbufqueue = SlotQueue<void *> ();
     comprqueue = SlotQueue<ComprSlot> ();
-    encrqueue  = SlotQueue<Block *> ();
+    frblkqueue = SlotQueue<Block *> ();
     writequeue = SlotQueue<Block *> ();
 }
 
@@ -47,11 +46,7 @@ FTBWriter::~FTBWriter ()
     Block *b;
     ComprSlot cs;
     uint32_t i;
-
-    while ((b = freeblocks) != NULL) {
-        freeblocks = *(Block **)b;
-        free (b);
-    }
+    void *f;
 
     if (xorblocks != NULL) {
         for (i = 0; i < xorgc; i ++) {
@@ -82,11 +77,15 @@ FTBWriter::~FTBWriter ()
         deflateEnd (&zstrm);
     }
 
+    while (frbufqueue.trydequeue (&f)) {
+        free (f);
+    }
+
     while (comprqueue.trydequeue (&cs)) {
         free (cs.buf);
     }
 
-    while (encrqueue.trydequeue (&b)) {
+    while (frblkqueue.trydequeue (&b)) {
         free (b);
     }
 
@@ -105,8 +104,9 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
 {
     bool ok;
     Header hdr;
-    int rc;
+    int i, rc;
     pthread_t compr_thandl, write_thandl;
+    void *buf;
 
     maybesetdefaulthasher ();
 
@@ -148,6 +148,15 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
      * Start counting runtime for this thread.
      */
     rft_runtime = - getruntime ();
+
+    /*
+     * Malloc some page-aligned buffers for reading from files.
+     */
+    for (i = 0; i < SQ_NSLOTS; i ++) {
+        rc = posix_memalign ((void **)&buf, PAGESIZE, FILEIOSIZE);
+        if (rc != 0) NOMEM ();
+        frbufqueue.enqueue (buf);
+    }
 
     /*
      * Process root path of files to back up.
@@ -345,7 +354,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     struct stat statend;
     uint32_t i, plen;
     uint64_t len, ofs;
-    uint8_t *buf;
+    void *buf;
 
     /*
      * Only back up regular files changed since the -since option value.
@@ -389,11 +398,12 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
      * We always write the exact number of bytes shown in the header.
      */
     for (; ofs < hdr->size; ofs += rc) {
-        len  = hdr->size - ofs;                                 // number of bytes to end-of-file
-        if (len > FILEIOSIZE) len = FILEIOSIZE;                 // never more than this at a time
-        plen = (len + PAGESIZE - 1) & -PAGESIZE;                // page-aligned length for O_DIRECT
-        rc   = posix_memalign ((void **)&buf, PAGESIZE, plen);  // page-aligned buffer for O_DIRECT
-        if (rc != 0) NOMEM ();
+        len  = hdr->size - ofs;                     // number of bytes to end-of-file
+        if (len > FILEIOSIZE) len = FILEIOSIZE;     // never more than this at a time
+        plen = (len + PAGESIZE - 1) & -PAGESIZE;    // page-aligned length for O_DIRECT
+        rft_runtime += getruntime ();
+        buf  = frbufqueue.dequeue ();               // page-aligned buffer for O_DIRECT
+        rft_runtime -= getruntime ();
         if (ok) {
             rc = tfs->fspread (fd, buf, plen, ofs);
             if (rc < 0) {
@@ -406,7 +416,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
                 fprintf (stderr, "ftbackup: pread(%s, ..., %llu, %llu) error: only got %d byte%s\n",
                         hdr->name, len, ofs, rc, ((rc == 1) ? "" : "s"));
                 ok = false;
-                memset (buf + rc, 0x69, len - rc);
+                memset ((uint8_t *) buf + rc, 0x69, len - rc);
             } else {
                 rc = len;  // might be more if plen > len and file has been extended since hdr->size was set
             }
@@ -414,7 +424,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
             memset (buf, 0x69, len);
             rc = len;
         }
-        write_queue (buf, rc, 1);
+        write_queue (buf, rc, 2);
     }
 
     /*
@@ -696,7 +706,8 @@ void FTBWriter::write_raw (void const *buf, uint32_t len, bool hdr)
  * @brief Queue the malloc()d buffer to be written to saveset.
  * @param buf = malloc()d buffer, will be freed after processing
  * @param len = number of bytes from buf to write
- * @param dty = 1: compress data bytes before writing
+ * @param dty = 1: compress data bytes before writing then call free()
+ *              2: compress data bytes before writing then call frbufqueue.enqueue()
  *              0: write data bytes as given without compression
  *             -1: write file header bytes as given without compression
  */
@@ -719,7 +730,8 @@ void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
  */
 #define CHECKROOM do { \
     if (zstrm.avail_out == 0) {                                         \
-        block = malloc_block ();                                        \
+        block = frblkqueue.dequeue ();                                  \
+        memset (block, 0, sizeof *block);                               \
         zstrm.next_out  = block->data;                                  \
         zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;   \
     }                                                                   \
@@ -727,7 +739,7 @@ void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
 
 #define CHECKFULL do { \
     if (zstrm.avail_out == 0) {                                         \
-        queue_data_block (block);                                       \
+        writequeue.enqueue (block);                                     \
         block = NULL;                                                   \
     }                                                                   \
 } while (false)
@@ -739,10 +751,15 @@ void *FTBWriter::compr_thread_wrapper (void *ftbw)
 void *FTBWriter::compr_thread ()
 {
     Block *block;
-    int dty, rc;
+    int dty, i, rc;
     ComprSlot slot;
     uint32_t bs, len;
     void *buf;
+
+    for (i = 0; i < SQ_NSLOTS; i ++) {
+        block = malloc_block ();
+        frblkqueue.enqueue (block);
+    }
 
     block = NULL;
     bs    = (1 << l2bs) - hashsize ();
@@ -834,58 +851,26 @@ void *FTBWriter::compr_thread ()
         /*
          * Either way, all done with input buffer.
          */
-        free (buf);
+        if (dty == 2) frbufqueue.enqueue (buf);
+                               else free (buf);
     }
 
     /*
-     * Normal (non-checkpointing) end, pad and queue final data block.
+     * Pad and queue final data block.
      */
     if (zstrm.avail_out != 0) {
         memset (zstrm.next_out, 0xFF, zstrm.avail_out);
-        queue_data_block (block);
+        writequeue.enqueue (block);
     }
 
     /*
      * Tell writer thread to write final blocks out.
      */
-    queue_data_block (NULL);
+    writequeue.enqueue (NULL);
 
     printthreadcputime ("compress");
 
     return NULL;
-}
-
-/**
- * @brief Fill in data block header and queue block to write_thread().
- * @param block = data block to queue
- */
-void FTBWriter::queue_data_block (Block *block)
-{
-    encrqueue.enqueue (block);
-}
-
-/**
- * @brief Malloc a block.  They are page aligned so O_DIRECT will work.
- */
-Block *FTBWriter::malloc_block ()
-{
-    Block *block;
-    int rc;
-    uint32_t bs;
-
-    pthread_mutex_lock (&freeblock_mutex);
-    block = freeblocks;
-    if (block != NULL) {
-        freeblocks = *(Block **)block;
-        pthread_mutex_unlock (&freeblock_mutex);
-    } else {
-        pthread_mutex_unlock (&freeblock_mutex);
-        bs = 1 << l2bs;
-        rc = posix_memalign ((void **)&block, PAGESIZE, bs);
-        if (rc != 0) NOMEM ();
-    }
-    memset (block, 0, sizeof *block);
-    return block;
 }
 
 /**
@@ -910,7 +895,8 @@ void *FTBWriter::write_thread ()
         xorblocks = (Block **) malloc (xorgc * sizeof *xorblocks);
         if (xorblocks == NULL) NOMEM ();
         for (i = 0; i < xorgc; i ++) {
-            xorblocks[i] = malloc_block ();
+            xorblocks[i] = block = malloc_block ();
+            block->xorbc = 0;
         }
     }
 
@@ -929,10 +915,10 @@ void *FTBWriter::write_thread ()
      * Process datablocks.
      */
     wst_runtime += getruntime ();
-    while ((block = encrqueue.dequeue ()) != NULL) {
+    while ((block = writequeue.dequeue ()) != NULL) {
         wst_runtime -= getruntime ();
         xor_data_block (block);
-        free_block (block);
+        frblkqueue.enqueue (block);
         wst_runtime += getruntime ();
     }
     wst_runtime -= getruntime ();
@@ -958,6 +944,21 @@ void *FTBWriter::write_thread ()
     printthreadruntime ("write", wst_runtime);
 
     return NULL;
+}
+
+/**
+ * @brief Malloc a block.  They are page aligned so O_DIRECT will work.
+ */
+Block *FTBWriter::malloc_block ()
+{
+    Block *block;
+    int rc;
+    uint32_t bs;
+
+    bs = 1 << l2bs;
+    rc = posix_memalign ((void **)&block, PAGESIZE, bs);
+    if (rc != 0) NOMEM ();
+    return block;
 }
 
 /**
@@ -1146,17 +1147,6 @@ void FTBWriter::write_ssblock (Block *block)
         }
     }
     byteswrittentoseg += bs;
-}
-
-/**
- * @brief Free block buffer for re-allocation via malloc_block().
- */
-void FTBWriter::free_block (Block *block)
-{
-    pthread_mutex_lock (&freeblock_mutex);
-    *(Block **) block = freeblocks;
-    freeblocks = block;
-    pthread_mutex_unlock (&freeblock_mutex);
 }
 
 /**
