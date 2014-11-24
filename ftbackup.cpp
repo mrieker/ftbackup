@@ -2,6 +2,24 @@
  * @brief Fault-tolerant backup.
  */
 
+static char const *gpl = "\
+  \n\
+  Copyright (C) 2014, Mike Rieker, Beverly, MA, USA  \n\
+  \n\
+  This program is free software: you can redistribute it and/or modify  \n\
+  it under the terms of the GNU General Public License as published by  \n\
+  the Free Software Foundation, either version 3 of the License, or  \n\
+  (at your option) any later version.  \n\
+  \n\
+  This program is distributed in the hope that it will be useful,  \n\
+  but WITHOUT ANY WARRANTY; without even the implied warranty of  \n\
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the  \n\
+  GNU General Public License for more details.  \n\
+  \n\
+  You should have received a copy of the GNU General Public License  \n\
+  along with this program.  If not, see <http://www.gnu.org/licenses/>.  \n\
+";
+
 #include "ftbackup.h"
 #include "ftbreader.h"
 #include "ftbwriter.h"
@@ -1486,6 +1504,7 @@ char *FTBRestorer::maybe_output_listing (char *dstname, Header *hdr)
  */
 static int cmd_version (int argc, char **argv)
 {
+    printf ("%s\n", gpl);
     printf ("%s %s%s\n", GITCOMMITHASH, GITCOMMITDATE, (GITCOMMITCLEAN ? "" : " (dirty)"));
     return 0;
 }
