@@ -28,6 +28,7 @@ static bool ismountpointoremptydir (char const *name);
 static bool diff_symlink (char const *path1, char const *path2);
 static bool diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2);
 
+static int cmd_help (int argc, char **argv);
 static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv);
 static int cmd_version (int argc, char **argv);
@@ -134,6 +135,7 @@ int main (int argc, char **argv)
         if (strcasecmp (argv[1], "backup")  == 0) return cmd_backup  (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "compare") == 0) return cmd_compare (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "diff")    == 0) return cmd_diff    (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "help")    == 0) return cmd_help    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "list")    == 0) return cmd_list    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "version") == 0) return cmd_version (argc - 1, argv + 1);
@@ -143,6 +145,7 @@ int main (int argc, char **argv)
     fprintf (stderr, "usage: ftbackup backup ...\n");
     fprintf (stderr, "       ftbackup compare ...\n");
     fprintf (stderr, "       ftbackup diff ...\n");
+    fprintf (stderr, "       ftbackup help\n");
     fprintf (stderr, "       ftbackup list ...\n");
     fprintf (stderr, "       ftbackup restore ...\n");
     fprintf (stderr, "       ftbackup version\n");
@@ -1210,6 +1213,120 @@ static bool diff_special (char const *path1, char const *path2, struct stat *sta
         return true;
     }
     return false;
+}
+
+/**
+ * @brief Display help screen.
+ *        Opens the ftbackup.html file in a web browser.
+ */
+static int cmd_help (int argc, char **argv)
+{
+    char buff[4096], name[256], *p, *q;
+    FILE *file;
+
+    // http://standards.freedesktop.org/desktop-entry-spec/desktop-entry-spec-1.1.html
+
+    /*
+     * First check for ~/.local/share/applications/preferred-web-browser.desktop
+     */
+    p = getenv ("HOME");
+    if (p != NULL) {
+        sprintf (name, "%s/.local/share/applications/preferred-web-browser.desktop", p);
+        file = fopen (name, "r");
+        if (file != NULL) goto findexec;
+    }
+
+    /*
+     * Search /usr/share/applications/mimeinfo.cache for a line saying what app reads text/html files.
+     */
+    strcpy (name, "/usr/share/applications/mimeinfo.cache");
+    file = fopen (name, "r");
+    if (file == NULL) {
+        fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", name, mystrerr (errno));
+        goto alt;
+    }
+    while (true) {
+        if (fgets (buff, sizeof buff, file) == NULL) {
+            fclose (file);
+            fprintf (stderr, "ftbackup: can't find text/html= in %s\n", name);
+            goto alt;
+        }
+        p = strchr (buff, '\n');
+        if (p == NULL) continue;
+        *p = 0;
+        if (strncasecmp (buff, "text/html=", 10) == 0) break;
+    }
+    fclose (file);
+
+    /*
+     * Search the application file for the command line.
+     */
+    sprintf (name, "/usr/share/applications/%s", buff + 10);
+    file = fopen (name, "r");
+    if (file == NULL) {
+        fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", name, mystrerr (errno));
+        goto alt;
+    }
+
+findexec:
+    while (true) {
+        if (fgets (buff, sizeof buff, file) == NULL) {
+            fclose (file);
+            fprintf (stderr, "ftbackup: can't find exec= in %s\n", name);
+            goto alt;
+        }
+        p = strchr (buff, '\n');
+        if (p == NULL) continue;
+        *p = 0;
+        if (strncasecmp (buff, "exec=", 5) == 0) break;
+    }
+    fclose (file);
+
+    /*
+     * The line contains %u or %U for place to put a URL.
+     * Or it contains %f or %F for place to file a filename.
+     */
+    p = strstr (buff + 5, "%u");
+    if (p == NULL) p = strstr (buff + 5, "%U");
+    if (p != NULL) {
+        strcpy (p, "file://");
+        p += strlen (p);
+        q  = argv[-1];
+        if (q[0] != '/') {
+            getcwd (p, buff + sizeof buff - p);
+            p += strlen (p);
+            if (p[-1] != '/') *(p ++) = '/';
+            while (memcmp (q, "./", 2) == 0) q += 2;
+        }
+        strcpy (p, q);
+        strcat (p, ".html");
+        p = buff + 5;
+        goto spawn;
+    }
+
+    p = strstr (buff + 5, "%f");
+    if (p == NULL) p = strstr (buff + 5, "%F");
+    if (p != NULL) {
+        strcpy (p, argv[-1]);
+        strcat (p, ".html");
+        p = buff + 5;
+        goto spawn;
+    }
+
+    fprintf (stderr, "ftbackup: can't find %%f,%%F,%%u,%%U tag in %s of %s\n", buff + 5, name);
+alt:
+    fprintf (stderr, "ftbackup: open %s.html in web browser\n", argv[-1]);
+    return 1;
+
+spawn:
+    fprintf (stderr, "ftbackup: spawning %s\n", p);
+    file = popen (p, "w");
+    if (file == NULL) {
+        fprintf (stderr, "ftbackup: popen(%s) error: %s\n", p, mystrerr (errno));
+        return 1;
+    }
+    pclose (file);
+    return 0;
 }
 
 /**

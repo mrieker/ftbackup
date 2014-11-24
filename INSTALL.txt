@@ -1,0 +1,10 @@
+
+Should be easy to install:
+
+  1) make -j8
+  2) sudo cp ftbackup /usr/local/bin/
+  3) sudo cp ftbackup.html /usr/local/bin/
+
+You can use any directory instead of /usr/local/bin,
+including just leaving it here in this directory.
+

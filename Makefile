@@ -24,6 +24,7 @@ DISTFILES := \
     ftbreader.h                 \
     ftbwriter.cpp               \
     ftbwriter.h                 \
+    INSTALL.txt                 \
     Makefile                    \
     $(VERFILE)
 
