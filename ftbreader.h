@@ -39,6 +39,7 @@ private:
     };
 
     Block **xorblocks;
+    bool skipall;
     bool wprwrite;
     bool zisopen;
     char **inodesname;
@@ -69,6 +70,7 @@ private:
     void read_first_block ();
     LinkedBlock *read_or_recover_block ();
     long wrapped_pread (void *buf, long len, uint64_t pos);
+    long handle_pread_error (void *buf, long len, uint64_t pos);
 };
 
 #endif

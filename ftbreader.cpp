@@ -50,8 +50,9 @@ FTBReader::FTBReader ()
     opt_simrderrs = 0;
 
     xorblocks     = NULL;
-    wprwrite      = 0;
-    zisopen       = 0;
+    skipall       = false;
+    wprwrite      = false;
+    zisopen       = false;
     inodesname    = NULL;
     ssbasename    = NULL;
     sssegname     = NULL;
@@ -197,7 +198,11 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                 }
             }
 
-            if (ssfd < 0) {
+            if (ssfd >= 0) {
+                ssbasename = ssname;
+                sssegname  = (char *) alloca (ssnamelen + 1);
+                strcpy (sssegname, ssname);
+            } else {
 
                 // if something like permissions error, print error and die
                 if ((errno != EISDIR) && (errno != ENOENT)) {
@@ -1086,7 +1091,7 @@ FTBReader::LinkedBlock *FTBReader::read_or_recover_block ()
 {
     int rc;
     LinkedBlock *linkedBlock, **lLinkedBlock;
-    uint32_t bs, bsnh, i;
+    uint32_t bs, bsnh, i, xorno;
     uint64_t lastreadoffs;
 
     bs = 1 << l2bs;
@@ -1235,6 +1240,7 @@ noxoread:
          * If just read an XOR block, XOR the data in and hopefully recover a missing block.
          */
         if (linkedBlock->block.xorbc > 0) {
+            xorno = linkedBlock->block.xorno;
 
             /*
              * Make sure this XOR block is for what we think is the current span.
@@ -1255,9 +1261,9 @@ noxoread:
              * xorblocks covers^         ^-^all of this stuff missing
              *                              so lastxorno never got set to 4
              */
-            if (linkedBlock->block.xorno <= lastxorno) continue;
-            if (linkedBlock->block.xorno >  lastxorno + xorgc) {
-                lastxorno = linkedBlock->block.xorno - xorgc;
+            if (xorno <= lastxorno) continue;
+            if (xorno >  lastxorno + xorgc) {
+                lastxorno = xorno - xorgc;
                 memset (gotxors, 0, xorgc * sizeof *gotxors);
                 for (i = 0; i < xorgc; i ++) memset (xorblocks[i], 0, bsnh);
             }
@@ -1265,8 +1271,8 @@ noxoread:
             /*
              * Get which XOR group this XOR block beints to, ie, which of (3) or (4) it is.
              */
-            i = (linkedBlock->block.xorno - 1) % xorgc;
-            if (gotxors[i] == linkedBlock->block.xorbc - 1) {
+            i = (xorno - 1) % xorgc;
+            if (gotxors[i] + 1 == linkedBlock->block.xorbc) {
 
                 /*
                  * There is exactly one missing data block from the group,
@@ -1301,6 +1307,24 @@ noxoread:
                     linkedBlock = NULL;
                 }
             }
+
+            /*
+             * If there aren't any missing data blocks, check the XOR just to be sure and
+             * output a warning if not.
+             */
+            else if (gotxors[i] == linkedBlock->block.xorbc) {
+                xorblockdata (&linkedBlock->block, xorblocks[i], bsnh);
+                memset (linkedBlock->block.magic, 0, 8);
+                linkedBlock->block.xorno = 0;
+                linkedBlock->block.xorbc = 0;
+                for (i = 0; i < bsnh; i ++) {
+                    if (((uint8_t *)&linkedBlock->block)[i] != 0) {
+                        fprintf (stderr, "ftbackup: xor block %u verify error\n", xorno);
+                        break;
+                    }
+                }
+            }
+
             continue;
         }
 
@@ -1376,7 +1400,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         if (wprfile == NULL) {
             wprfile = fopen ("/tmp/simrderrs.dat", "a+");
             if (wprfile == NULL) {
-                fprintf (stderr, "wrapped_pread*: error creating /tmp/simrderrs.dat: %s\n", mystrerr (errno));
+                fprintf (stderr, "ftbackup: error creating /tmp/simrderrs.dat: %s\n", mystrerr (errno));
                 abort ();
             }
             setlinebuf (wprfile);
@@ -1385,13 +1409,13 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         if (!wprwrite) {
             rc = fscanf (wprfile, "%llu %lu %lu\n", &rpos, &nowtv.tv_sec, &nowtv.tv_usec);
             if (rc < 3) {
-                fprintf (stderr, "wrapped_pread*: writing /tmp/simrderrs.dat\n");
+                fprintf (stderr, "ftbackup: writing /tmp/simrderrs.dat\n");
                 wprwrite = 1;
             } else if (rpos != pos) {
-                fprintf (stderr, "wrapped_pread*: rpos %llu != pos %llu\n", rpos, pos);
+                fprintf (stderr, "ftbackup: rpos %llu != pos %llu\n", rpos, pos);
                 abort ();
             } else if (pos == 0) {
-                fprintf (stderr, "wrapped_pread*: reading /tmp/simrderrs.dat\n");
+                fprintf (stderr, "ftbackup: reading /tmp/simrderrs.dat\n");
             }
         }
 
@@ -1402,7 +1426,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
 
         if ((nowtv.tv_usec % opt_simrderrs) == 0) {
             errno = MYESIMRDER;
-            return -1;
+            return handle_pread_error (buf, len, pos - pipepos);
         }
     }
 
@@ -1417,7 +1441,9 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
          * If not doing segments, do the read anyway and let it error out.
          */
         if ((pos - pipepos < (uint64_t) ssstat.st_size) || (thissegno == 0)) {
-            return pread (ssfd, buf, len, pos - pipepos);
+            rc = pread (ssfd, buf, len, pos - pipepos);
+            if (rc < 0) rc = handle_pread_error (buf, len, pos - pipepos);
+            return rc;
         }
 
         /*
@@ -1470,6 +1496,145 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         pipepos += rc;
     }
     return ofs;
+}
+
+/**
+ * @brief There was an error reading block from saveset,
+ *        give the user option to retry or skip it.
+ */
+long FTBReader::handle_pread_error (void *buf, long len, uint64_t pos)
+{
+    char cwdbuff[4096], ttybuff[32], ttyname[24];
+    int ttyfd, saverrno;
+    long rc;
+
+    saverrno = errno;
+    if (skipall || !isatty (STDIN_FILENO)) {
+        errno = saverrno;
+        return -1;
+    }
+
+    sprintf (ttyname, "/proc/self/fd/%d", STDIN_FILENO);
+    ttyfd = open (ttyname, O_RDWR);
+    if (ttyfd < 0) {
+        fprintf (stderr, "ftbackup: open(%s) error: %s\n", ttyname, mystrerr (errno));
+        errno = saverrno;
+        return -1;
+    }
+
+    dprintf (ttyfd, "ftbackup: pread(%s,%llu) error: %s\n", sssegname, pos, mystrerr (saverrno));
+    dprintf (ttyfd, "ftbackup: Some filesystems umount the filesystem or take it offline,\n");
+    dprintf (ttyfd, "ftbackup: so you may need to re-mount it before continuing.\n");
+    dprintf (ttyfd, "ftbackup: Use control-Z to suspend and return to the shell,\n");
+    dprintf (ttyfd, "ftbackup: then use the shell 'fg' command to resume the restore.\n");
+    dprintf (ttyfd, "ftbackup: Enter 'abort' to abort the restore\n");
+    dprintf (ttyfd, "ftbackup:       'close' to close the saveset file so umount will complete\n");
+    dprintf (ttyfd, "ftbackup:       'retry' to retry reading the same block\n");
+    dprintf (ttyfd, "ftbackup:       'skip' to skip this block and try to read next\n");
+    dprintf (ttyfd, "ftbackup:       'skipall' to skip this block and all future read errors\n");
+    dprintf (ttyfd, "ftbackup:       control-Z to suspend and return to the shell\n");
+
+    if (getcwd (cwdbuff, sizeof cwdbuff) == NULL) {
+        fprintf (stderr, "ftbackup: getcwd() error: %s\n", mystrerr (errno));
+        cwdbuff[0] = 0;
+    }
+
+    while (true) {
+
+        /*
+         * Get away from current directory in case it is on the saveset filesystem.
+         * This will allow umount to work.
+         */
+        if (cwdbuff[0] != 0) chdir ("/");
+
+        /*
+         * Read command from tty.
+         */
+        dprintf (ttyfd, "ftbackup: abort, close, retry, skip, control-Z: ");
+        rc = read (ttyfd, ttybuff, sizeof ttybuff - 1);
+        if (rc < 0) {
+            rc = errno;
+            if (cwdbuff[0] != 0) chdir (cwdbuff);
+            fprintf (stderr, "ftbackup: read(%s) error: %s\n", ttyname, mystrerr (rc));
+            rc = -1;
+            break;
+        }
+        ttybuff[rc] = 0;
+
+        /*
+         * Restore current directory before processing command in case it is required
+         * to re-open the saveset file.
+         */
+        if (cwdbuff[0] != 0) chdir (cwdbuff);
+
+        /*
+         * Ignore control-D in case it is entered by mistake.
+         */
+        if (rc == 0) {
+            dprintf (ttyfd, "\nftbackup: ignoring end-of-file, use 'abort' to abort restore\n");
+            continue;
+        }
+
+        /*
+         * Abort: just exit.
+         */
+        if (strcasecmp (ttybuff, "abort\n") == 0) {
+            exit (EX_SSIO);
+        }
+
+        /*
+         * Close: close saveset file.
+         */
+        if (strcasecmp (ttybuff, "close\n") == 0) {
+            if (ssfd >= 0) {
+                close (ssfd);
+                ssfd = -1;
+                dprintf (ttyfd, "ftbackup: saveset %s closed\n", sssegname);
+            }
+            continue;
+        }
+
+        /*
+         * Retry: retry the pread() on the same spot.  Re-open saveset if it was closed.
+         *        If successful, return to caller with success status, otherwise re-prompt.
+         */
+        if (strcasecmp (ttybuff, "retry\n") == 0) {
+            if (ssfd < 0) {
+                ssfd = open (sssegname, O_RDONLY);
+                if (ssfd < 0) {
+                    dprintf (ttyfd, "ftbackup: open(%s) error: %s\n", sssegname, mystrerr (errno));
+                    continue;
+                }
+            }
+            rc = pread (ssfd, buf, len, pos);
+            if (rc < 0) {
+                dprintf (ttyfd, "ftbackup: pread(%s,%llu) error: %s\n", sssegname, pos, mystrerr (errno));
+                continue;
+            }
+            break;
+        }
+
+        /*
+         * Skip: return out telling caller current block had a read error.  Caller will try to read next block.
+         *       Re-open saveset if it was closed.
+         */
+        if ((strcasecmp (ttybuff, "skip\n") == 0) || (strcasecmp (ttybuff, "skipall\n") == 0)) {
+            if (ssfd < 0) {
+                ssfd = open (sssegname, O_RDONLY);
+                if (ssfd < 0) {
+                    dprintf (ttyfd, "ftbackup: open(%s) error: %s\n", sssegname, mystrerr (errno));
+                    continue;
+                }
+            }
+            skipall = (strcasecmp (ttybuff, "skipall\n") == 0);
+            rc = -1;
+            break;
+        }
+    }
+
+    close (ttyfd);
+    errno = saverrno;
+    return rc;
 }
 
 /**

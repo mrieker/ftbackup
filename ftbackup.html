@@ -3,20 +3,20 @@
     <BODY>
         <H2>ftbackup - Fault Tolerant Backup</H2>
         <P><PRE>
-            Copyright (C) 2014, Mike Rieker, Beverly, MA, USA
+    Copyright (C) 2014, Mike Rieker, Beverly, MA, USA
 
-            This program is free software: you can redistribute it and/or modify
-            it under the terms of the GNU General Public License as published by
-            the Free Software Foundation, either version 3 of the License, or
-            (at your option) any later version.
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
 
-            This program is distributed in the hope that it will be useful,
-            but WITHOUT ANY WARRANTY; without even the implied warranty of
-            MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-            GNU General Public License for more details.
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
 
-            You should have received a copy of the GNU General Public License
-            along with this program.  If not, see <A HREF="http://www.gnu.org/licenses/">http://www.gnu.org/licenses/</A>.
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <A HREF="http://www.gnu.org/licenses/">http://www.gnu.org/licenses/</A>.
         </PRE></P>
         <P>
             The <B>ftbackup</B> utility provides for restoring archived files
@@ -28,7 +28,7 @@
             corrupt.
         </P>
         <P>
-            The <B>ftbackup</B> command has several sub-commands:
+            The <B>ftbackup</B> utility has several commands:
             <UL>
                 <LI><B>backup</B> : create an archive from an existing
                     directory tree</LI>
@@ -96,7 +96,7 @@
                     <LI><B>-record <I>file</I></B> : write the time the backup
                         is started to the given file.  This file can then be
                         used by a <B>-since</B> option on a later <B>backup</B>
-                        sub-command for doing incremental backups.</LI>
+                        command for doing incremental backups.</LI>
                     <LI><B>-segsize <I>segsz</I></B> : instead of writing the
                         whole archive to a single file, break it up into a
                         series of smaller files, each of size <I>segsz</I>
@@ -189,7 +189,7 @@
                     <LI><B>-incremental</B> : when comparing a directory to a
                         filesystem with existing contents in that directory,
                         existing files not present in the directory
-                        being restored will elicit an compare error.</LI>
+                        being restored will elicit a compare error.</LI>
                     <LI><B>-simrderrs <I>prob</I></B> : simulate read error
                         with probability of 1 out of <I>prob</I> blocks.</LI>
                     <LI><B>-verbose</B> : print name of each file just before
@@ -257,8 +257,8 @@
                 <TT>''</TT> to select all files.</LI>
             <LI><B><I>dstprefix</I></B> : string to replace <I>srcprefix</I> in
                 the filename within the saveset to determine file on disk to
-                compare the file from the saveset to.  Use same as
-                <I>srcprefix</I> to compare to identical file.</LI>
+                restore the file from the saveset to.  Use same as
+                <I>srcprefix</I> to restore to identical file.</LI>
         </UL>
         Example:
         <UL>
@@ -291,6 +291,41 @@
             </LI>
             <LI><B><I>saveset</I></B> : name of archive to be verified.</LI>
         </UL>
+        <HR>
+        <H3>Saveset read errors</H3>
+        <P>
+            When encountering an I/O error while reading a saveset, such as for
+            a restore, ftbackup will prompt the user at stdin for what action
+            to take.  The stdin must be a TTY.  If not, the <B>skip</B> action
+            will be taken.
+        </P>
+        <P>
+            Note:  You can force <B>skip</B> mode without any prompting by
+            redirecting stdin from something other than a TTY, such as
+            <TT>/dev/null</TT>.
+        </P>
+        <P>
+            Available actions are:
+            <UL>
+                <LI><B>abort</B> - abort the restore by exiting
+                <LI><B>close</B> - close the saveset file
+                <LI><B>retry</B> - retry the read (after re-opening the saveset
+                    if necessary)
+                <LI><B>skip</B> - skip reading this block and continue
+                    processing, recovering the skipped block via XORs if
+                    possible (after re-opening the saveset if necessary)
+                <LI><B>skipall</B> - just as with <B>skip</B>, but assume
+                    <B>skip</B> action for all future read errors of the
+                    saveset.
+                <LI><B><I>control-Z</I></B> - suspend restore and return to
+                    shell.  The restore can be resumed by entering a <B>fg</B>
+                    shell command.  This can be used to do things like umount
+                    then remount the saveset disk in case the filesystem has
+                    done something that can be remedied by such actions.  If
+                    remounting, use the <B>-r</B> option if possible to remount
+                    the disk in read-only mode.
+            </UL>
+        <P>
         <HR>
         <H3>Saveset format</H3>
         <P>
