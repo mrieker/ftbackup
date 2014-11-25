@@ -21,6 +21,8 @@
 
 #define SQ_NSLOTS 4
 
+struct SkipName;
+
 template <class T>
 struct SlotQueue {
     SlotQueue ();
@@ -68,6 +70,7 @@ private:
     FILE *noncefile;
     ino_t *inodeslist;
     int ssfd;
+    SkipName *skipnames;
     time_t lastverbsec;
     uint32_t inodessize;
     uint32_t inodesused;

@@ -135,6 +135,8 @@
                         <TT>~SKIPDIR.FTB</TT> (the directory is backed up as a
                         directory containing only the <TT>~SKIPDIR.FTB</TT>
                         file)</LI>
+                    <LI>file listed in <TT>~SKIPNAMES.FTB</TT> within a
+                        directory</LI>
                     <LI>files with ctime earlier than given by <B>-since</B>
                 </UL>
             </LI>
@@ -177,6 +179,20 @@
                 </UL>
             </LI>
         </UL>
+        ~SKIPNAMES.FTB contents
+        <P>
+            When creating a backup, <B>ftbackup</B> will skip files listed in
+            any <TT>~SKIPNAMES.FTB</TT> files encountered in the directory
+            tree.  Each line of <TT>~SKIPNAMES.FTB</TT> is a name (possibly
+            with a sub-directory relative to the directory of the
+            <TT>~SKIPNAMES.FTB</TT> file).  The given name and/or sub-directory
+            can contain <B><TT>*</TT></B> or <B><TT>?</TT></B> wildcard
+            characters.  A <B><TT>**</TT></B> wildcard matches directory
+            boundaries as well, eg, <TT>**.tmp</TT> skips all files in the tree
+            ending in <TT>.tmp</TT>, whereas <TT>*.tmp</TT> only skips files in
+            the same directory as the <TT>~SKIPNAMES.FTB</TT> file ending in
+            <TT>.tmp</TT>.
+        </P>
         <HR>
         <H3>ftbackup compare <I>options</I> <I>saveset</I> <I>srcprefix</I>
             <I>dstprefix</I></H3>

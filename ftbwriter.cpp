@@ -20,7 +20,15 @@
 #include "ftbackup.h"
 #include "ftbwriter.h"
 
+struct SkipName {
+    SkipName *next;     // next line in this ~SKIPNAMES.FTB or next outer ~SKIPNAMES.FTB
+    char const *dir;    // directory path the ~SKIPNAMES.FTB file is in (wildcard relative to this dir)
+    char wild[1];       // wildcard line from the ~SKIPNAMES.FTB file
+};
+
 static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val);
+static bool skipbyname (SkipName *skipname, char const *path);
+static bool wildcardmatch (char const *wild, char const *name);
 static uint64_t getruntime ();
 static void printthreadcputime (char const *name);
 static void printthreadruntime (char const *name, uint64_t runtime);
@@ -42,6 +50,7 @@ FTBWriter::FTBWriter ()
     noncefile     = NULL;
     inodeslist    = NULL;
     ssfd          = -1;
+    skipnames     = NULL;
     lastverbsec   = 0;
     inodessize    = 0;
     inodesused    = 0;
@@ -493,11 +502,14 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
 bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
 {
     bool ok;
-    char *bbb, *buf, *path;
+    char *bbb, *buf, *p, *path, *q, *snbuf, *snname;
     char const *name;
-    int i, j, len, longest, nents, pathlen;
+    int i, j, len, longest, nents, pathlen, snfd, snlen;
+    SkipName *saveskipnames, *skipname;
     struct dirent *de, **names;
     struct stat statend;
+
+    ok = true;
 
     /*
      * Read and sort the directory contents.
@@ -506,6 +518,45 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     if (nents < 0) {
         fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", hdr->name, mystrerr (errno));
         return false;
+    }
+
+    /*
+     * If directory contains ~SKIPNAMES.FTB, add those names as wildcards
+     * to list of files to skip.
+     */
+    saveskipnames = skipnames;
+    snbuf  = NULL;
+    snname = (char *) alloca (strlen (hdr->name) + 16);
+    sprintf (snname, "%s/~SKIPNAMES.FTB", hdr->name);
+    snfd = open (snname, O_RDONLY);
+    if ((snfd < 0) && (errno != ENOENT)) {
+        fprintf (stderr, "ftbackup: open(%s) error: %s\n", snname, mystrerr (errno));
+        ok = false;
+    }
+    if (snfd >= 0) {
+        snlen = lseek (snfd, 0, SEEK_END);
+        snbuf = (char *) mmap (NULL, snlen, PROT_READ, MAP_SHARED, snfd, 0);
+        if (snbuf == (char *) MAP_FAILED) {
+            fprintf (stderr, "ftbackup: mmap(%s) error: %s\n", snname, mystrerr (errno));
+            snbuf = NULL;
+            ok = false;
+        }
+        close (snfd);
+    }
+    if (snbuf != NULL) {
+        for (p = snbuf; p < snbuf + snlen; p = ++ q) {
+            q = strchr (p, '\n');
+            if (q == NULL) q = snbuf + snlen;
+            if (q > p) {
+                skipname = (SkipName *) alloca (q - p + sizeof *skipname);
+                skipname->next = skipnames;
+                skipname->dir  = hdr->name;
+                memcpy (skipname->wild, p, q - p);
+                skipname->wild[q-p] = 0;
+                skipnames = skipname;
+            }
+        }
+        munmap (snbuf, snlen);
     }
 
     /*
@@ -599,8 +650,6 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
         }
     }
 
-    ok = true;
-
     /*
      * Write the files in the directory out to the saveset.
      */
@@ -609,11 +658,14 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
         name = de->d_name;
         if ((strcmp (name, ".") != 0) && (strcmp (name, "..") != 0)) {
             strcpy (path + pathlen, name);
-            ok &= write_file (path, statbuf);
+            if (!skipbyname (skipnames, path)) {
+                ok &= write_file (path, statbuf);
+            }
         }
         free (de);
     }
     free (names);
+    skipnames = saveskipnames;
 
     /*
      * If different mtime than when started, output warning message.
@@ -625,6 +677,107 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     }
 
     return ok;
+}
+
+/**
+ * @brief See if a file is in the current ~SKIPNAMES.FTB list.
+ * @param skipname = list of names to skip
+ * @param path = full path being tested
+ * @returns true: file matched by skip list
+ *         false: file not in skip list
+ */
+static bool skipbyname (SkipName *skipname, char const *path)
+{
+    for (; skipname != NULL; skipname = skipname->next) {
+
+        // get directory the ~SKIPNAMES.FTB file was in
+        // it is the directory its wild applies to
+        int sndirlen = strlen (skipname->dir);
+        while ((sndirlen > 0) && (skipname->dir[sndirlen-1] == '/')) -- sndirlen;
+
+        // see if the file being tested is in that directory
+        if (memcmp (skipname->dir, path, sndirlen) != 0) continue;
+        if (path[sndirlen] != '/') continue;
+        do sndirlen ++;
+        while (path[sndirlen] == '/');
+
+        // if name matches wildcard, skip the file
+        char const *wild = skipname->wild;
+        if (wildcardmatch (wild, path + sndirlen)) return true;
+    }
+
+    return false;
+}
+
+/**
+ * @brief Match a filename against a wildcard.
+ * @param wild = wildcard to match
+ * @param name = filename to match
+ * @returns true: filename is matched by wildcard
+ *         false: does not match
+ */
+static bool wildcardmatch (char const *wild, char const *name)
+{
+    int i = 0;
+    int j = 0;
+    int wcend = strlen (wild);
+    int nmend = strlen (name);
+
+    // keep going as long as there are wildcard chars to match
+    while (i < wcend) {
+        char wc = wild[i];
+
+        // '*' matches any number of (including zero) chars from name
+        if (wc == '*') {
+
+            // skip over all the '*'s in a row in wildcard
+            // '**' matches chars including '/' from name
+            // '*' matches chars excluding '/' from name
+            bool supa = false;
+            while (true) {
+                if (++ i >= wcend) return true;
+                if (wild[i] != '*') break;
+                supa = true;
+            }
+
+            // optimization: if no more '*'s in wildcard, then match the end of both strings.
+            if (strchr (wild + i, '*') == NULL) {
+                int k = nmend - (wcend - i);
+                if (j > k) return false;
+                if (!supa && (memchr (name + j, '/', k - j) != NULL)) return false;
+                return wildcardmatch (wild + i, name + k);
+            }
+
+            // try matching what's left of name with what's left in wildcard.
+            // take one char at a time from name and try to match.
+            // take '/' from name iff supa mode.
+            while (true) {
+                if (wildcardmatch (wild + i, name + j)) return true;
+                if (++ j >= nmend) return false;
+                if (!supa && (name[j-1] == '/')) return false;
+            }
+        }
+
+        // there's a wildcard char other than '*' to match
+        // if nothing left in name, it's no match
+        if (j >= nmend) return false;
+
+        // fail match if chars don't match
+        if (wc != '?') {
+            if (wc == '\\') {
+                if (++ i >= wcend) break;
+                wc = wild[i];
+            }
+
+            if (name[j] != wc) return false;
+        }
+
+        // those chars match, on to next chars
+        i ++;
+        j ++;
+    }
+
+    return j >= nmend;
 }
 
 /**
