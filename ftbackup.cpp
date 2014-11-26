@@ -1253,7 +1253,7 @@ static bool diff_special (char const *path1, char const *path2, struct stat *sta
  */
 static int cmd_help (int argc, char **argv)
 {
-    char buff[4096], name[256], *p, *q;
+    char buff[4096], name[1024], *p, *q;
     FILE *file;
 
     // http://standards.freedesktop.org/desktop-entry-spec/desktop-entry-spec-1.1.html
@@ -1263,7 +1263,7 @@ static int cmd_help (int argc, char **argv)
      */
     p = getenv ("HOME");
     if (p != NULL) {
-        sprintf (name, "%s/.local/share/applications/preferred-web-browser.desktop", p);
+        snprintf (name, sizeof name, "%s/.local/share/applications/preferred-web-browser.desktop", p);
         file = fopen (name, "r");
         if (file != NULL) goto findexec;
     }
@@ -1293,11 +1293,16 @@ static int cmd_help (int argc, char **argv)
     /*
      * Search the application file for the command line.
      */
-    sprintf (name, "/usr/share/applications/%s", buff + 10);
-    file = fopen (name, "r");
-    if (file == NULL) {
-        fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", name, mystrerr (errno));
-        goto alt;
+    for (p = buff + 10;; p = ++ q) {
+        q = strchr (p, ';');
+        if (q != NULL) *q = 0;
+        snprintf (name, sizeof name, "/usr/share/applications/%s", p);
+        file = fopen (name, "r");
+        if (file != NULL) break;
+        if ((errno != ENOENT) || (q == NULL)) {
+            fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", name, mystrerr (errno));
+            if (q == NULL) goto alt;
+        }
     }
 
 findexec:
@@ -1325,7 +1330,7 @@ findexec:
         p += strlen (p);
         q  = argv[-1];
         if (q[0] != '/') {
-            getcwd (p, buff + sizeof buff - p);
+            UNUSED (getcwd (p, buff + sizeof buff - p));
             p += strlen (p);
             if (p[-1] != '/') *(p ++) = '/';
             while (memcmp (q, "./", 2) == 0) q += 2;

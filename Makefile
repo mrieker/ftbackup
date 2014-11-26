@@ -35,7 +35,7 @@ ftbackup: $(SRCFILES) ftbackup.h ftbreader.h ftbwriter.h $(VERFILE)
 		-DGITCOMMITHASH='"$(COMMITHASH)"' \
 		-DGITCOMMITDATE='"$(COMMITDATE)"' \
 		-DGITCOMMITCLEAN=$(COMMITCLEAN)   \
-		$(SRCFILES) -lpthread -lrt -lz -lstdc++
+		$(SRCFILES) -lpthread -lrt -lz -lstdc++ -lm
 
 clean:
 	rm -rf cryptopp562

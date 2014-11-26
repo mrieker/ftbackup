@@ -29,11 +29,10 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 #include <zlib.h>
-
-#include <attr/xattr.h>
 
 #include "cryptopp562/cryptlib.h"
 
@@ -45,6 +44,7 @@
 #define FILEIOSIZE (32768U)
 #define DEF_CIPHERNAME "AES"
 #define DEF_HASHERNAME "SHA1"
+#define UNUSED(v) asm volatile ("" : : "g" (v))
 
 #define DEFXORSC 31 // write one XOR block per 31 data blocks
 #define DEFXORGC 2  // write XOR blocks in groups of 2, ie, after 62 data blocks

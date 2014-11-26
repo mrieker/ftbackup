@@ -1545,7 +1545,7 @@ long FTBReader::handle_pread_error (void *buf, long len, uint64_t pos)
          * Get away from current directory in case it is on the saveset filesystem.
          * This will allow umount to work.
          */
-        if (cwdbuff[0] != 0) chdir ("/");
+        if (cwdbuff[0] != 0) UNUSED (chdir ("/"));
 
         /*
          * Read command from tty.
@@ -1554,7 +1554,7 @@ long FTBReader::handle_pread_error (void *buf, long len, uint64_t pos)
         rc = read (ttyfd, ttybuff, sizeof ttybuff - 1);
         if (rc < 0) {
             rc = errno;
-            if (cwdbuff[0] != 0) chdir (cwdbuff);
+            if (cwdbuff[0] != 0) UNUSED (chdir (cwdbuff));
             fprintf (stderr, "ftbackup: read(%s) error: %s\n", ttyname, mystrerr (rc));
             rc = -1;
             break;
@@ -1565,7 +1565,7 @@ long FTBReader::handle_pread_error (void *buf, long len, uint64_t pos)
          * Restore current directory before processing command in case it is required
          * to re-open the saveset file.
          */
-        if (cwdbuff[0] != 0) chdir (cwdbuff);
+        if (cwdbuff[0] != 0) UNUSED (chdir (cwdbuff));
 
         /*
          * Ignore control-D in case it is entered by mistake.
