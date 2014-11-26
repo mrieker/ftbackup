@@ -2,7 +2,7 @@
  * @brief Write saveset by reading files from disk.
  */
 
-//  Copyright (C) 2014, Mike Rieker, Beverly, MA, USA
+//  Copyright (C) 2014, Mike Rieker, www.outerworldapps.com
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by

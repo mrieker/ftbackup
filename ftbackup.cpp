@@ -3,21 +3,32 @@
  */
 
 static char const *gpl = "\
-  \n\
-  Copyright (C) 2014, Mike Rieker, Beverly, MA, USA  \n\
-  \n\
+\n\
+  Copyright (C) 2014, Mike Rieker, www.outerworldapps.com  \n\
+\n\
   This program is free software: you can redistribute it and/or modify  \n\
   it under the terms of the GNU General Public License as published by  \n\
   the Free Software Foundation, either version 3 of the License, or  \n\
   (at your option) any later version.  \n\
-  \n\
+\n\
   This program is distributed in the hope that it will be useful,  \n\
   but WITHOUT ANY WARRANTY; without even the implied warranty of  \n\
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the  \n\
   GNU General Public License for more details.  \n\
-  \n\
+\n\
   You should have received a copy of the GNU General Public License  \n\
   along with this program.  If not, see <http://www.gnu.org/licenses/>.  \n\
+\n\
+  THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED WARRANTIES,  \n\
+  INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND  \n\
+  FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL OUTER WORLD  \n\
+  APPS OR ANY CONTRIBUTORS TO THIS SOFTWARE BE LIABLE FOR ANY DIRECT, INDIRECT,  \n\
+  INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT  \n\
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,  \n\
+  OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF  \n\
+  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING  \n\
+  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,  \n\
+  EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.  \n\
 ";
 
 #include "ftbackup.h"
@@ -47,6 +58,7 @@ static bool diff_symlink (char const *path1, char const *path2);
 static bool diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2);
 
 static int cmd_help (int argc, char **argv);
+static int cmd_license (int argc, char **argv);
 static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv);
 static int cmd_version (int argc, char **argv);
@@ -154,6 +166,7 @@ int main (int argc, char **argv)
         if (strcasecmp (argv[1], "compare") == 0) return cmd_compare (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "diff")    == 0) return cmd_diff    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "help")    == 0) return cmd_help    (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "license") == 0) return cmd_license (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "list")    == 0) return cmd_list    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "version") == 0) return cmd_version (argc - 1, argv + 1);
@@ -164,6 +177,7 @@ int main (int argc, char **argv)
     fprintf (stderr, "       ftbackup compare ...\n");
     fprintf (stderr, "       ftbackup diff ...\n");
     fprintf (stderr, "       ftbackup help\n");
+    fprintf (stderr, "       ftbackup license\n");
     fprintf (stderr, "       ftbackup list ...\n");
     fprintf (stderr, "       ftbackup restore ...\n");
     fprintf (stderr, "       ftbackup version\n");
@@ -1348,6 +1362,15 @@ spawn:
 }
 
 /**
+ * @brief Display license string.
+ */
+static int cmd_license (int argc, char **argv)
+{
+    printf ("%s\n", gpl);
+    return 0;
+}
+
+/**
  * @brief List contents of a saveset.
  */
 struct FTBLister : FTBReader {
@@ -1504,7 +1527,6 @@ char *FTBRestorer::maybe_output_listing (char *dstname, Header *hdr)
  */
 static int cmd_version (int argc, char **argv)
 {
-    printf ("%s\n", gpl);
     printf ("%s %s%s\n", GITCOMMITHASH, GITCOMMITDATE, (GITCOMMITCLEAN ? "" : " (dirty)"));
     return 0;
 }
