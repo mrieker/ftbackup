@@ -65,8 +65,9 @@ private:
     };
 
     struct HistSlot {
-        char *fname;
+        HistSlot *next;
         uint32_t seqno;
+        char fname[1];
     };
 
     Block **xorblocks;
@@ -75,8 +76,12 @@ private:
     char *sssegname;
     dev_t inodesdevno;
     FILE *noncefile;
+    HistSlot *histqueue_head;
+    HistSlot **histqueue_tail;
     ino_t *inodeslist;
     int ssfd;
+    pthread_cond_t histqueue_cond;
+    pthread_mutex_t histqueue_mutex;
     SkipName *skipnames;
     time_t lastverbsec;
     uint32_t inodessize;
@@ -92,7 +97,6 @@ private:
 
     SlotQueue<void *>    frbufqueue;  // free buffers for reading files
     SlotQueue<ComprSlot> comprqueue;  // variable length data to be compressed and blocked
-    SlotQueue<HistSlot>  histqueue;   // filenames to write to history database
     SlotQueue<Block *>   frblkqueue;  // free blocks for writing to saveset
     SlotQueue<Block *>   writequeue;  // blocks to be written to saveset
 

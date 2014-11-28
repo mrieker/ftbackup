@@ -79,8 +79,11 @@
                         <UL>
                             <LI><B><I>histss</I></B> - name of saveset written
                                 to database (defaults to <I>saveset</I>
-                                parameter value)
-                            <LI><B><I>histdb</I></B> - SQLite3 database file
+                                parameter value).
+                            <LI><B><I>histdb</I></B> - SQLite3 database file.
+                                This file is created if it does not already
+                                exist, otherwise, the new files and saveset are
+                                added as needed.
                         </UL>
                     <LI><B>-idirect</B> : use O_DIRECT when reading files to be
                         archived.  Usually does not result in performance
@@ -159,7 +162,8 @@
                         written two at a time will be done.
                 </UL>
             <LI><TT>ftbackup backup -blocksize 65536 -encrypt :idea @backup.key
-                -idirect -odirect -record /var/log/root_disk.reco -segsize
+                -history /var/log/root_disk.hist -idirect -odirect 
+                -record /var/log/root_disk.reco -segsize
                 $((1024*1024*1024)) -verbsec 30 -xor 63,2 /sdd1/root.full.ftb/
                 /</TT>
                 <UL>
@@ -175,6 +179,8 @@
                     <LI>The saveset files are encrypted using <TT>IDEA</TT> and
                         <TT>SHA1</TT> with the key given in file
                         <TT>backup.key</TT>.</LI>
+                    <LI>Each filename as it is backed up is written to 
+                        <TT>/var/log/root_disk.hist</TT> SQLite3 database
                     <LI>Record the date/time the backup was started in
                         <TT>/var/log/root_disk.reco</TT> so that an incremental
                         backup can be done later using <TT>-since

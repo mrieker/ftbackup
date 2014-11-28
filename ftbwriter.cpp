@@ -34,34 +34,39 @@ static void printthreadruntime (char const *name, uint64_t runtime);
 
 FTBWriter::FTBWriter ()
 {
-    opt_verbose   = 0;
-    histdbname    = NULL;
-    histssname    = NULL;
-    ioptions      = 0;
-    ooptions      = 0;
-    opt_verbsec   = 0;
-    opt_segsize   = 0;
-    opt_since     = 0;
+    opt_verbose    = 0;
+    histdbname     = NULL;
+    histssname     = NULL;
+    ioptions       = 0;
+    ooptions       = 0;
+    opt_verbsec    = 0;
+    opt_segsize    = 0;
+    opt_since      = 0;
 
-    xorblocks     = NULL;
-    zisopen       = false;
-    ssbasename    = NULL;
-    sssegname     = NULL;
-    inodesdevno   = 0;
-    noncefile     = NULL;
-    inodeslist    = NULL;
-    ssfd          = -1;
-    skipnames     = NULL;
-    lastverbsec   = 0;
-    inodessize    = 0;
-    inodesused    = 0;
-    lastfileno    = 0;
-    lastseqno     = 0;
-    lastxorno     = 0;
-    thissegno     = 0;
+    xorblocks      = NULL;
+    zisopen        = false;
+    ssbasename     = NULL;
+    sssegname      = NULL;
+    inodesdevno    = 0;
+    noncefile      = NULL;
+    histqueue_head = NULL;
+    histqueue_tail = &histqueue_head;
+    inodeslist     = NULL;
+    ssfd           = -1;
+    skipnames      = NULL;
+    lastverbsec    = 0;
+    inodessize     = 0;
+    inodesused     = 0;
+    lastfileno     = 0;
+    lastseqno      = 0;
+    lastxorno      = 0;
+    thissegno      = 0;
     byteswrittentoseg = 0;
-    inodesmtim    = NULL;
+    inodesmtim     = NULL;
     memset (&zstrm, 0, sizeof zstrm);
+
+    pthread_cond_init  (&histqueue_cond,  NULL);
+    pthread_mutex_init (&histqueue_mutex, NULL);
 
     frbufqueue = SlotQueue<void *> ();
     comprqueue = SlotQueue<ComprSlot> ();
@@ -861,7 +866,6 @@ void *FTBWriter::compr_thread_wrapper (void *ftbw)
 void *FTBWriter::compr_thread ()
 {
     Block *block;
-    HistSlot hs;
     int dty, i, rc;
     ComprSlot slot;
     uint32_t bs, len;
@@ -948,10 +952,17 @@ void *FTBWriter::compr_thread ()
 
                     // if writing history, queue to history writing thread
                     if ((histdbname != NULL) && (((Header *)buf)->nameln > 0)) {
-                        hs.fname = strdup (((Header *)buf)->name);
-                        hs.seqno = block->seqno;
-                        if (hs.fname == NULL) NOMEM ();
-                        histqueue.enqueue (hs);
+                        char *fname = ((Header *)buf)->name;
+                        int fnamelen = strlen (fname);
+                        HistSlot *hs = (HistSlot *) malloc (fnamelen + sizeof *hs);
+                        hs->next  = NULL;
+                        hs->seqno = block->seqno;
+                        memcpy (hs->fname, fname, ++ fnamelen);
+                        pthread_mutex_lock (&histqueue_mutex);
+                        if (histqueue_head == NULL) pthread_cond_broadcast (&histqueue_cond);
+                        *histqueue_tail = hs;
+                        histqueue_tail  = &hs->next;
+                        pthread_mutex_unlock (&histqueue_mutex);
                     }
                 }
 
@@ -993,8 +1004,13 @@ void *FTBWriter::compr_thread ()
      * Tell history thread to close database and exit.
      */
     if (histdbname != NULL) {
-        hs.fname = NULL;
-        histqueue.enqueue (hs);
+        pthread_mutex_lock (&histqueue_mutex);
+        pthread_cond_broadcast (&histqueue_cond);
+        HistSlot *hs = (HistSlot *) malloc (sizeof *hs);
+        memset (hs, 0, sizeof *hs);
+        *histqueue_tail = hs;
+        histqueue_tail = &hs->next;
+        pthread_mutex_unlock (&histqueue_mutex);
     }
 
     /*
@@ -1015,7 +1031,7 @@ void *FTBWriter::hist_thread ()
 {
     char *sqlerr;
     char const *fieldname;
-    HistSlot hs;
+    HistSlot *hs;
     int filesel_fileid, rc;
     sqlite3 *histdb;
     sqlite3_int64 fileid, ssid;
@@ -1112,10 +1128,21 @@ void *FTBWriter::hist_thread ()
      * Keep processing incoming names until we get and end marker.
      */
     while (true) {
+
+        /*
+         * Dequeue an entry to process.
+         */
         wht_runtime += getruntime ();
-        hs = histqueue.dequeue ();
+        pthread_mutex_lock (&histqueue_mutex);
+        while ((hs = histqueue_head) == NULL) {
+            pthread_cond_wait (&histqueue_cond, &histqueue_mutex);
+        }
+        if ((histqueue_head = hs->next) == NULL) {
+            histqueue_tail = &histqueue_head;
+        }
+        pthread_mutex_unlock (&histqueue_mutex);
         wht_runtime -= getruntime ();
-        if (hs.fname == NULL) break;
+        if (hs->fname[0] == 0) break;
 
         /*
          * See if record already exists with the filename.
@@ -1123,7 +1150,7 @@ void *FTBWriter::hist_thread ()
          * If not, insert new record and get corresponding fileid.
          */
         sqlite3_reset (filesel);
-        rc = sqlite3_bind_text (filesel, 1, hs.fname, -1, SQLITE_TRANSIENT);
+        rc = sqlite3_bind_text (filesel, 1, hs->fname, -1, SQLITE_TRANSIENT);
         if (rc != SQLITE_OK) INTERR (sqlite3_bind_text,  rc);
         rc = sqlite3_step (filesel);
         switch (rc) {
@@ -1141,7 +1168,7 @@ void *FTBWriter::hist_thread ()
              */
             case SQLITE_DONE: {
                 sqlite3_reset (fileins);
-                rc = sqlite3_bind_text (fileins, 1, hs.fname, -1, SQLITE_TRANSIENT);
+                rc = sqlite3_bind_text (fileins, 1, hs->fname, -1, SQLITE_TRANSIENT);
                 if (rc != SQLITE_OK) INTERR (sqlite3_bind_text,  rc);
                 rc = sqlite3_step (fileins);
                 if (rc != SQLITE_DONE) {
@@ -1172,7 +1199,7 @@ void *FTBWriter::hist_thread ()
         if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
         rc = sqlite3_bind_int64 (inststmt, 2, ssid);
         if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
-        rc = sqlite3_bind_int64 (inststmt, 3, (uint64_t) hs.seqno);
+        rc = sqlite3_bind_int64 (inststmt, 3, (uint64_t) hs->seqno);
         if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
 
         rc = sqlite3_step (inststmt);
@@ -1182,8 +1209,12 @@ void *FTBWriter::hist_thread ()
             exit (EX_HIST);
         }
 
-        free (hs.fname);
+        /*
+         * Entry all processed.
+         */
+        free (hs);
     }
+    free (hs);
 
     sqlite3_finalize (fileins);
     sqlite3_finalize (filesel);
@@ -1191,7 +1222,7 @@ void *FTBWriter::hist_thread ()
     sqlite3_close (histdb);
     wht_runtime += getruntime ();
 
-    printthreadruntime ("hist", wht_runtime);
+    printthreadruntime ("history", wht_runtime);
 
     return NULL;
 }
