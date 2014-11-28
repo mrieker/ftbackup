@@ -26,6 +26,7 @@
                     directory tree</LI>
                 <LI><B>diff</B> : compare two existing directory trees</LI>
                 <LI><B>help</B> : display this file in web browser</LI>
+                <LI><B>history</B> : look up files saved in database</LI>
                 <LI><B>license</B> : print out the license info</LI>
                 <LI><B>list</B> : list files saved in an archive</LI>
                 <LI><B>restore</B> : restore files saved in an archive to a
@@ -69,7 +70,18 @@
                                 </UL>
                             </LI>
                         </UL>
+                        If no <B>-encrypt</B> option is given, an <TT>MD5</TT>
+                        hash will be written to each block as a data integrity
+                        check.
                     </LI>
+                    <LI><B>-history [::<I>histss</I>] <I>histdb</I></B> : write
+                        saved filenames to an SQLite3 database.
+                        <UL>
+                            <LI><B><I>histss</I></B> - name of saveset written
+                                to database (defaults to <I>saveset</I>
+                                parameter value)
+                            <LI><B><I>histdb</I></B> - SQLite3 database file
+                        </UL>
                     <LI><B>-idirect</B> : use O_DIRECT when reading files to be
                         archived.  Usually does not result in performance
                         increase of the archiving itself, but avoids thrashing
@@ -132,8 +144,20 @@
                 </UL>
             </LI>
         </UL>
-        Example:
+        Examples:
         <UL>
+            <LI><TT>ftbackup backup home.ftb /home</TT>
+                <UL>
+                    <LI>Backs up the <TT>/home</TT> directory tree to a single
+                        saveset file <TT>home.ftb</TT>.
+                    <LI>The blocksize is the default of 32768.
+                    <LI>It is not encrypted.
+                    <LI>O_DIRECT is not used for either reading the files nor
+                        writing the saveset, so the system disk cache will be
+                        used.
+                    <LI>The default XOR blocks of one per 31 data blocks,
+                        written two at a time will be done.
+                </UL>
             <LI><TT>ftbackup backup -blocksize 65536 -encrypt :idea @backup.key
                 -idirect -odirect -record /var/log/root_disk.reco -segsize
                 $((1024*1024*1024)) -verbsec 30 -xor 63,2 /sdd1/root.full.ftb/
@@ -148,8 +172,9 @@
                         (<TT>-idirect</TT>) so as not to fill up the cache with
                         blocks from files that will probably not be read until
                         the next full backup.</LI>
-                    <LI>The saveset files are encrypted using IDEA and SHA1
-                        with the key given in file <TT>backup.key</TT>.</LI>
+                    <LI>The saveset files are encrypted using <TT>IDEA</TT> and
+                        <TT>SHA1</TT> with the key given in file
+                        <TT>backup.key</TT>.</LI>
                     <LI>Record the date/time the backup was started in
                         <TT>/var/log/root_disk.reco</TT> so that an incremental
                         backup can be done later using <TT>-since
@@ -170,20 +195,21 @@
                 </UL>
             </LI>
         </UL>
-        ~SKIPNAMES.FTB contents
-        <P>
-            When creating a backup, <B>ftbackup</B> will skip files listed in
-            any <TT>~SKIPNAMES.FTB</TT> files encountered in the directory
-            tree.  Each line of <TT>~SKIPNAMES.FTB</TT> is a name (possibly
-            with a sub-directory relative to the directory of the
-            <TT>~SKIPNAMES.FTB</TT> file).  The given name and/or sub-directory
-            can contain <B><TT>*</TT></B> or <B><TT>?</TT></B> wildcard
-            characters.  A <B><TT>**</TT></B> wildcard matches directory
-            boundaries as well, eg, <TT>**.tmp</TT> skips all files in the tree
-            ending in <TT>.tmp</TT>, whereas <TT>*.tmp</TT> only skips files in
-            the same directory as the <TT>~SKIPNAMES.FTB</TT> file ending in
-            <TT>.tmp</TT>.
-        </P>
+        ~SKIPNAMES.FTB contents:
+        <UL>
+            <LI>When creating a backup, <B>ftbackup</B> will skip files listed
+                in any <TT>~SKIPNAMES.FTB</TT> files encountered in the
+                directory tree.  Each line of <TT>~SKIPNAMES.FTB</TT> is a
+                name (possibly with a sub-directory relative to the directory
+                of the <TT>~SKIPNAMES.FTB</TT> file).  The given name and/or
+                sub-directory can contain <B><TT>*</TT></B> or
+                <B><TT>?</TT></B> wildcard characters.  A <B><TT>**</TT></B>
+                wildcard matches directory boundaries as well, eg,
+                <TT>**.tmp</TT> skips all files in the tree ending in
+                <TT>.tmp</TT>, whereas <TT>*.tmp</TT> only skips files in the
+                same directory as the <TT>~SKIPNAMES.FTB</TT> file ending in
+                <TT>.tmp</TT>.</LI>
+        </UL>
         <HR>
         <H3>ftbackup compare <I>options</I> <I>saveset</I> <I>srcprefix</I>
             <I>dstprefix</I></H3>
@@ -219,6 +245,23 @@
         <UL>
             <LI><B><I>path1</I></B> : path of one directory to compare</LI>
             <LI><B><I>path2</I></B> : path of other directory to compare to</LI>
+        </UL>
+        <HR>
+        <H3>ftbackup history <I>histdb</I> <I>wildcard</I> ...</H3>
+        <UL>
+            <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
+                -history option on <B>backup</B> command line</LI>
+            <LI><B><I>wildcard</I></B> - wildcard to search for</LI>
+        </UL>
+        Wildcards:
+        <UL>
+            <LI>The given <I>wildcard</I> can contain <B><TT>*</TT></B> or
+                <B><TT>?</TT></B> wildcard characters.  A <B><TT>**</TT></B>
+                wildcard matches directory boundaries as well, eg,
+                <TT>**.tmp</TT> matches all files in the tree ending in
+                <TT>.tmp</TT>, whereas <TT>*.tmp</TT> only matches files in the
+                one directory file ending in <TT>.tmp</TT>.</LI>
+            <LI>Use <TT>'**'</TT> to select all files in the database.</LI>
         </UL>
         <HR>
         <H3>ftbackup list <I>options</I> <I>saveset</I></H3>
@@ -315,7 +358,8 @@
             Available actions are:
             <UL>
                 <LI><B>abort</B> - abort the restore by exiting
-                <LI><B>close</B> - close the saveset file
+                <LI><B>close</B> - close the saveset file (so the saveset
+                    volume can be umounted if necessary)
                 <LI><B>retry</B> - retry the read (after re-opening the saveset
                     if necessary)
                 <LI><B>skip</B> - skip reading this block and continue

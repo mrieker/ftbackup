@@ -28,7 +28,6 @@ struct SkipName {
 
 static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val);
 static bool skipbyname (SkipName *skipname, char const *path);
-static bool wildcardmatch (char const *wild, char const *name);
 static uint64_t getruntime ();
 static void printthreadcputime (char const *name);
 static void printthreadruntime (char const *name, uint64_t runtime);
@@ -36,6 +35,8 @@ static void printthreadruntime (char const *name, uint64_t runtime);
 FTBWriter::FTBWriter ()
 {
     opt_verbose   = 0;
+    histdbname    = NULL;
+    histssname    = NULL;
     ioptions      = 0;
     ooptions      = 0;
     opt_verbsec   = 0;
@@ -130,9 +131,9 @@ FTBWriter::~FTBWriter ()
 int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
 {
     bool ok;
-    Header hdr;
+    Header endhdr;
     int i, rc;
-    pthread_t compr_thandl, write_thandl;
+    pthread_t compr_thandl, hist_thandl, write_thandl;
     void *buf;
 
     maybesetdefaulthasher ();
@@ -140,14 +141,14 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     /*
      * Create saveset file.
      */
+    ssbasename = ssname;
     if (strcmp (ssname, "-") == 0) {
         ssfd = STDOUT_FILENO;
         fflush (stdout);
     } else {
         if (opt_segsize > 0) {
-            ssbasename = ssname;
-            sssegname  = (char *) alloca (strlen (ssbasename) + SEGNODECDIGS + 4);
-            ssname     = sssegname;
+            sssegname = (char *) alloca (strlen (ssbasename) + SEGNODECDIGS + 4);
+            ssname    = sssegname;
             sprintf (sssegname, "%s%.*u", ssbasename, SEGNODECDIGS, ++ thissegno);
         }
         ssfd = open (ssname, O_WRONLY | O_CREAT | O_TRUNC | ooptions, 0666);
@@ -164,10 +165,14 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     }
 
     /*
-     * Create compression and writing threads.
+     * Create compression, history and writing threads.
      */
     rc = pthread_create (&compr_thandl, NULL, compr_thread_wrapper, this);
     if (rc != 0) SYSERR (pthread_create, rc);
+    if (histdbname != NULL) {
+        rc = pthread_create (&hist_thandl, NULL, hist_thread_wrapper, this);
+        if (rc != 0) SYSERR (pthread_create, rc);
+    }
     rc = pthread_create (&write_thandl, NULL, write_thread_wrapper, this);
     if (rc != 0) SYSERR (pthread_create, rc);
 
@@ -193,8 +198,8 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     /*
      * Write EOF header so reader knows it got the whole saveset.
      */
-    memset (&hdr, 0, sizeof hdr);
-    write_header (&hdr);
+    memset (&endhdr, 0, sizeof endhdr);
+    write_header (&endhdr);
 
     /*
      * Tell the other threads to flush and terminate.
@@ -212,6 +217,10 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
      */
     rc = pthread_join (compr_thandl, NULL);
     if (rc != 0) SYSERR (pthread_join, rc);
+    if (histdbname != NULL) {
+        rc = pthread_join (hist_thandl, NULL);
+        if (rc != 0) SYSERR (pthread_join, rc);
+    }
     rc = pthread_join (write_thandl, NULL);
     if (rc != 0) SYSERR (pthread_join, rc);
 
@@ -710,77 +719,6 @@ static bool skipbyname (SkipName *skipname, char const *path)
 }
 
 /**
- * @brief Match a filename against a wildcard.
- * @param wild = wildcard to match
- * @param name = filename to match
- * @returns true: filename is matched by wildcard
- *         false: does not match
- */
-static bool wildcardmatch (char const *wild, char const *name)
-{
-    int i = 0;
-    int j = 0;
-    int wcend = strlen (wild);
-    int nmend = strlen (name);
-
-    // keep going as long as there are wildcard chars to match
-    while (i < wcend) {
-        char wc = wild[i];
-
-        // '*' matches any number of (including zero) chars from name
-        if (wc == '*') {
-
-            // skip over all the '*'s in a row in wildcard
-            // '**' matches chars including '/' from name
-            // '*' matches chars excluding '/' from name
-            bool supa = false;
-            while (true) {
-                if (++ i >= wcend) return true;
-                if (wild[i] != '*') break;
-                supa = true;
-            }
-
-            // optimization: if no more '*'s in wildcard, then match the end of both strings.
-            if (strchr (wild + i, '*') == NULL) {
-                int k = nmend - (wcend - i);
-                if (j > k) return false;
-                if (!supa && (memchr (name + j, '/', k - j) != NULL)) return false;
-                return wildcardmatch (wild + i, name + k);
-            }
-
-            // try matching what's left of name with what's left in wildcard.
-            // take one char at a time from name and try to match.
-            // take '/' from name iff supa mode.
-            while (true) {
-                if (wildcardmatch (wild + i, name + j)) return true;
-                if (++ j >= nmend) return false;
-                if (!supa && (name[j-1] == '/')) return false;
-            }
-        }
-
-        // there's a wildcard char other than '*' to match
-        // if nothing left in name, it's no match
-        if (j >= nmend) return false;
-
-        // fail match if chars don't match
-        if (wc != '?') {
-            if (wc == '\\') {
-                if (++ i >= wcend) break;
-                wc = wild[i];
-            }
-
-            if (name[j] != wc) return false;
-        }
-
-        // those chars match, on to next chars
-        i ++;
-        j ++;
-    }
-
-    return j >= nmend;
-}
-
-/**
  * @brief Write a directory used as a mountpoint, ie, write it as being empty.
  */
 bool FTBWriter::write_mountpoint (Header *hdr)
@@ -903,6 +841,7 @@ void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
     if (zstrm.avail_out == 0) {                                         \
         block = frblkqueue.dequeue ();                                  \
         memset (block, 0, sizeof *block);                               \
+        block->seqno    = ++ lastseqno;                                 \
         zstrm.next_out  = block->data;                                  \
         zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;   \
     }                                                                   \
@@ -922,11 +861,15 @@ void *FTBWriter::compr_thread_wrapper (void *ftbw)
 void *FTBWriter::compr_thread ()
 {
     Block *block;
+    HistSlot hs;
     int dty, i, rc;
     ComprSlot slot;
     uint32_t bs, len;
     void *buf;
 
+    /*
+     * Get some blocks to write to.
+     */
     for (i = 0; i < SQ_NSLOTS; i ++) {
         block = malloc_block ();
         frblkqueue.enqueue (block);
@@ -995,9 +938,21 @@ void *FTBWriter::compr_thread ()
                 // maybe we need a new output block
                 CHECKROOM;
 
-                // if first header in the block, save its offset for recoveries
-                if ((dty < 0) && (block->hdroffs == 0)) {
-                    block->hdroffs = (ulong_t)zstrm.next_out - (ulong_t)block;
+                // see if it is a file header
+                if (dty < 0) {
+
+                    // if first header in the block, save its offset for recoveries
+                    if (block->hdroffs == 0) {
+                        block->hdroffs = (ulong_t)zstrm.next_out - (ulong_t)block;
+                    }
+
+                    // if writing history, queue to history writing thread
+                    if ((histdbname != NULL) && (((Header *)buf)->nameln > 0)) {
+                        hs.fname = strdup (((Header *)buf)->name);
+                        hs.seqno = block->seqno;
+                        if (hs.fname == NULL) NOMEM ();
+                        histqueue.enqueue (hs);
+                    }
                 }
 
                 // we only care about setting block->hdroffs for the first byte of the header
@@ -1035,11 +990,208 @@ void *FTBWriter::compr_thread ()
     }
 
     /*
+     * Tell history thread to close database and exit.
+     */
+    if (histdbname != NULL) {
+        hs.fname = NULL;
+        histqueue.enqueue (hs);
+    }
+
+    /*
      * Tell writer thread to write final blocks out.
      */
     writequeue.enqueue (NULL);
 
     printthreadcputime ("compress");
+
+    return NULL;
+}
+
+void *FTBWriter::hist_thread_wrapper (void *ftbw)
+{
+    return ((FTBWriter *) ftbw)->hist_thread ();
+}
+void *FTBWriter::hist_thread ()
+{
+    char *sqlerr;
+    char const *fieldname;
+    HistSlot hs;
+    int filesel_fileid, rc;
+    sqlite3 *histdb;
+    sqlite3_int64 fileid, ssid;
+    sqlite3_stmt *fileins, *filesel, *inststmt, *savestmt;
+    uint64_t wht_runtime;
+
+    wht_runtime = - getruntime ();
+
+    /*
+     * Create and/or open database.
+     */
+    rc = sqlite3_open (histdbname, &histdb);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_open(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+    rc = sqlite3_exec (histdb,
+        "CREATE TABLE IF NOT EXISTS savesets (ssid INTEGER PRIMARY KEY, name NOT NULL, time NOT NULL);"
+        "CREATE TABLE IF NOT EXISTS files (fileid INTEGER PRIMARY KEY, name NOT NULL UNIQUE);"
+        "CREATE TABLE IF NOT EXISTS instances ("
+            "fileid NOT NULL, "
+            "ssid NOT NULL, "
+            "seqno NOT NULL, "
+            "PRIMARY KEY (fileid, ssid),"
+            "FOREIGN KEY (fileid) REFERENCES files (fileid),"
+            "FOREIGN KEY (ssid) REFERENCES savesets (ssid) ON DELETE CASCADE"
+            ")",
+        NULL, NULL, &sqlerr);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_exec(%s, CREATE TABLE) error: %s\n", histdbname, sqlerr);
+        sqlite3_free (sqlerr);
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+
+    /*
+     * Write saveset record and get its rowid number.
+     */
+    rc = sqlite3_prepare_v2 (histdb, 
+            "INSERT INTO savesets (name,time) VALUES (?1,CURRENT_TIMESTAMP)", -1, &savestmt, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_prepare(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+    rc = sqlite3_bind_text (savestmt, 1, (histssname == NULL) ? ssbasename : histssname, -1, SQLITE_TRANSIENT);
+    if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
+    rc = sqlite3_step (savestmt);
+    if (rc != SQLITE_DONE) {
+        fprintf (stderr, "ftbackup: sqlite3_step(%s, INSERT INTO savesets) error: %s\n", histdbname, sqlerr);
+        sqlite3_free (sqlerr);
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+    sqlite3_finalize (savestmt);
+    ssid = sqlite3_last_insert_rowid (histdb);
+
+    /*
+     * Pre-compile SQL statements used in processing loop.
+     */
+    rc = sqlite3_prepare_v2 (histdb, 
+            "SELECT fileid FROM files WHERE name=?1",
+            -1, &filesel, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+    for (filesel_fileid = 0;; filesel_fileid ++) {
+        fieldname = sqlite3_column_name (filesel, filesel_fileid);
+        if (strcmp (fieldname, "fileid") == 0) break;
+    }
+
+    rc = sqlite3_prepare_v2 (histdb, 
+            "INSERT INTO files (name) VALUES (?1)",
+            -1, &fileins, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, INSERT INTO files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+
+    rc = sqlite3_prepare_v2 (histdb, 
+            "INSERT OR IGNORE INTO instances (fileid,ssid,seqno) VALUES (?1,?2,?3)",
+            -1, &inststmt, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, INSERT INTO instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+
+    /*
+     * Keep processing incoming names until we get and end marker.
+     */
+    while (true) {
+        wht_runtime += getruntime ();
+        hs = histqueue.dequeue ();
+        wht_runtime -= getruntime ();
+        if (hs.fname == NULL) break;
+
+        /*
+         * See if record already exists with the filename.
+         * If so, get the corresponding fileid.
+         * If not, insert new record and get corresponding fileid.
+         */
+        sqlite3_reset (filesel);
+        rc = sqlite3_bind_text (filesel, 1, hs.fname, -1, SQLITE_TRANSIENT);
+        if (rc != SQLITE_OK) INTERR (sqlite3_bind_text,  rc);
+        rc = sqlite3_step (filesel);
+        switch (rc) {
+
+            /*
+             * Record already exists, get the fileid.
+             */
+            case SQLITE_ROW: {
+                fileid = sqlite3_column_int64 (filesel, filesel_fileid);
+                break;
+            }
+
+            /*
+             * No such record, insert record then get the fileid.
+             */
+            case SQLITE_DONE: {
+                sqlite3_reset (fileins);
+                rc = sqlite3_bind_text (fileins, 1, hs.fname, -1, SQLITE_TRANSIENT);
+                if (rc != SQLITE_OK) INTERR (sqlite3_bind_text,  rc);
+                rc = sqlite3_step (fileins);
+                if (rc != SQLITE_DONE) {
+                    fprintf (stderr, "ftbackup: sqlite3_step(%s, INSERT INTO files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+                    sqlite3_close (histdb);
+                    exit (EX_HIST);
+                }
+                fileid = sqlite3_last_insert_rowid (histdb);
+                break;
+            }
+
+            /*
+             * Some error.
+             */
+            default: {
+                fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+                sqlite3_close (histdb);
+                exit (EX_HIST);
+            }
+        }
+
+        /*
+         * Insert an instance record saying the file is backed up to the saveset.
+         */
+        sqlite3_reset (inststmt);
+
+        rc = sqlite3_bind_int64 (inststmt, 1, fileid);
+        if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
+        rc = sqlite3_bind_int64 (inststmt, 2, ssid);
+        if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
+        rc = sqlite3_bind_int64 (inststmt, 3, (uint64_t) hs.seqno);
+        if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
+
+        rc = sqlite3_step (inststmt);
+        if (rc != SQLITE_DONE) {
+            fprintf (stderr, "ftbackup: sqlite3_step(%s, INSERT INTO instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+            sqlite3_close (histdb);
+            exit (EX_HIST);
+        }
+
+        free (hs.fname);
+    }
+
+    sqlite3_finalize (fileins);
+    sqlite3_finalize (filesel);
+    sqlite3_finalize (inststmt);
+    sqlite3_close (histdb);
+    wht_runtime += getruntime ();
+
+    printthreadruntime ("hist", wht_runtime);
 
     return NULL;
 }
@@ -1138,7 +1290,7 @@ Block *FTBWriter::malloc_block ()
 void FTBWriter::xor_data_block (Block *block)
 {
     Block *xorblock;
-    uint32_t bs, i, oldxorbc;
+    uint32_t bs, dataseqno, i, oldxorbc;
 
     bs = (1 << l2bs) - hashsize ();
 
@@ -1146,10 +1298,10 @@ void FTBWriter::xor_data_block (Block *block)
      * Fill in data block header.
      */
     memcpy (block->magic, BLOCK_MAGIC, 8);
-    block->seqno = ++ lastseqno;
     block->l2bs  = l2bs;
     block->xorgc = xorgc;
     block->xorsc = xorsc;
+    dataseqno = block->seqno;
 
     /*
      * If we are generating XOR blocks, XOR the data block into the XOR block.
@@ -1159,7 +1311,7 @@ void FTBWriter::xor_data_block (Block *block)
         /*
          * XOR the data block into the XOR block.
          */
-        i = (lastseqno - 1) % xorgc;
+        i = (dataseqno - 1) % xorgc;
         xorblock = xorblocks[i];
         oldxorbc = xorblock->xorbc;
         if (oldxorbc == 0) {
@@ -1177,7 +1329,7 @@ void FTBWriter::xor_data_block (Block *block)
         /*
          * If that was the last data block of the XOR span, hash XOR blocks and write to saveset.
          */
-        if (lastseqno % (xorgc * xorsc) == 0) {
+        if (dataseqno % (xorgc * xorsc) == 0) {
             hash_xor_blocks ();
         }
     } else {
@@ -1421,7 +1573,8 @@ static void printthreadruntime (char const *name, uint64_t runtime)
 
     rc = clock_gettime (CLOCK_THREAD_CPUTIME_ID, &tp);
     if (rc < 0) SYSERRNO (clock_gettime);
-    fprintf (stderr, "ftbackup: thread %8s cpu time %6u.%.9u, run time %6u.%.9u\n",
-            name, (uint32_t) tp.tv_sec, (uint32_t) tp.tv_nsec,
-            (uint32_t) (runtime / 1000000000U), (uint32_t) (runtime % 1000000000U));
+    fprintf (stderr, "ftbackup: thread %8s run time %6u.%.9u, cpu time %6u.%.9u\n",
+            name, 
+            (uint32_t) (runtime / 1000000000U), (uint32_t) (runtime % 1000000000U),
+            (uint32_t) tp.tv_sec, (uint32_t) tp.tv_nsec);
 }

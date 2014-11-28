@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,6 +54,7 @@
 #define EX_CMD   1  // command error
 #define EX_SSIO  2  // saveset io error
 #define EX_FILIO 3  // file io error
+#define EX_HIST  4  // history database error
 
 #define BLOCK_MAGIC  "ftbackup"
 #define HEADER_MAGIC "ftbheder"
@@ -158,5 +160,7 @@ struct IFSAccess {
 #define MYEDATACMP 632396223
 #define MYESIMRDER 632396224
 char const *mystrerr (int err);
+int wildcardlength (char const *wild);
+bool wildcardmatch (char const *wild, char const *name);
 
 #endif

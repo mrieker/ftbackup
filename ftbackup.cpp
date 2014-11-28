@@ -58,6 +58,7 @@ static bool diff_symlink (char const *path1, char const *path2);
 static bool diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2);
 
 static int cmd_help (int argc, char **argv);
+static int cmd_history (int argc, char **argv);
 static int cmd_license (int argc, char **argv);
 static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv);
@@ -166,6 +167,7 @@ int main (int argc, char **argv)
         if (strcasecmp (argv[1], "compare") == 0) return cmd_compare (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "diff")    == 0) return cmd_diff    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "help")    == 0) return cmd_help    (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "history") == 0) return cmd_history (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "license") == 0) return cmd_license (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "list")    == 0) return cmd_list    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1);
@@ -177,6 +179,7 @@ int main (int argc, char **argv)
     fprintf (stderr, "       ftbackup compare ...\n");
     fprintf (stderr, "       ftbackup diff ...\n");
     fprintf (stderr, "       ftbackup help\n");
+    fprintf (stderr, "       ftbackup history ...\n");
     fprintf (stderr, "       ftbackup license\n");
     fprintf (stderr, "       ftbackup list ...\n");
     fprintf (stderr, "       ftbackup restore ...\n");
@@ -215,6 +218,16 @@ static int cmd_backup (int argc, char **argv)
             if (strcasecmp (argv[i], "-encrypt") == 0) {
                 i = ftbwriter.decodecipherargs (argc, argv, i, true);
                 if (i < 0) goto usage;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-history") == 0) {
+                if (++ i >= argc) goto usage;
+                if (memcmp (argv[i], "::", 2) == 0) {
+                    ftbwriter.histssname = argv[i] + 2;
+                    if (++ i >= argc) goto usage;
+                }
+                if (argv[i][0] == ':') goto usage;
+                ftbwriter.histdbname = argv[i];
                 continue;
             }
             if (strcasecmp (argv[i], "-idirect") == 0) {
@@ -326,6 +339,8 @@ usage:
     fprintf (stderr, "                            powers-of-two, range %u..%u\n", MINBLOCKSIZE, MAXBLOCKSIZE);
     fprintf (stderr, "                            default is %u\n", DEFBLOCKSIZE);
     usagecipherargs ("encrypt");
+    fprintf (stderr, "    -history [::<histss>] <histdb>\n");
+    fprintf (stderr, "                          add filenames saved to SQLite database\n");
     fprintf (stderr, "    -idirect              use O_DIRECT when reading files\n");
     fprintf (stderr, "    -noxor                don't write any recovery blocks\n");
     fprintf (stderr, "                            default is to write recovery blocks\n");
@@ -1367,6 +1382,184 @@ spawn:
 }
 
 /**
+ * @brief Display history information.
+ */
+static int cmd_history (int argc, char **argv)
+{
+    char const *fieldname, *histdbname, *name, *savename, *savetime, *wildcard;
+    int filesel_fileid, filesel_name, fileselall_fileid, fileselall_name;
+    int fileselpfx_fileid, fileselpfx_name, i, instsel_name, instsel_seqno, instsel_time;
+    int rc, wildcardlen;
+    sqlite3 *histdb;
+    sqlite3_int64 fileid, seqno;
+    sqlite3_stmt *filesel, *fileselall, *fileselpfx, *instsel;
+
+    /*
+     * Open given database.
+     */
+    if (argc < 2) goto usage;
+    histdbname = argv[1];
+    rc = sqlite3_open_v2 (histdbname, &histdb, SQLITE_OPEN_READONLY, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_open(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+
+    /*
+     * Pre-compile select statement that selects all files.
+     */
+    rc = sqlite3_prepare_v2 (histdb,
+        "SELECT fileid,name FROM files ORDER BY name",
+        -1, &fileselall, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+    for (fileselall_fileid = 0;; fileselall_fileid ++) {
+        fieldname = sqlite3_column_name (fileselall, fileselall_fileid);
+        if (strcmp (fieldname, "fileid") == 0) break;
+    }
+    for (fileselall_name = 0;; fileselall_name ++) {
+        fieldname = sqlite3_column_name (fileselall, fileselall_name);
+        if (strcmp (fieldname, "name") == 0) break;
+    }
+
+    /*
+     * Pre-compile select statement that selects a range of files.
+     */
+    rc = sqlite3_prepare_v2 (histdb,
+        "SELECT fileid,name FROM files WHERE name BETWEEN ?1 AND ?2 ORDER BY name",
+        -1, &fileselpfx, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+    for (fileselpfx_fileid = 0;; fileselpfx_fileid ++) {
+        fieldname = sqlite3_column_name (fileselpfx, fileselpfx_fileid);
+        if (strcmp (fieldname, "fileid") == 0) break;
+    }
+    for (fileselpfx_name = 0;; fileselpfx_name ++) {
+        fieldname = sqlite3_column_name (fileselpfx, fileselpfx_name);
+        if (strcmp (fieldname, "name") == 0) break;
+    }
+
+    /*
+     * Pre-compile select statement that selects savesets for a file.
+     */
+    rc = sqlite3_prepare_v2 (histdb,
+        "SELECT name,seqno,time FROM instances,savesets WHERE instances.fileid=?1 AND savesets.ssid=instances.ssid ORDER BY time DESC",
+        -1, &instsel, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+    for (instsel_name = 0;; instsel_name ++) {
+        fieldname = sqlite3_column_name (instsel, instsel_name);
+        if (strcmp (fieldname, "name") == 0) break;
+    }
+    for (instsel_seqno = 0;; instsel_seqno ++) {
+        fieldname = sqlite3_column_name (instsel, instsel_seqno);
+        if (strcmp (fieldname, "seqno") == 0) break;
+    }
+    for (instsel_time = 0;; instsel_time ++) {
+        fieldname = sqlite3_column_name (instsel, instsel_time);
+        if (strcmp (fieldname, "time") == 0) break;
+    }
+
+    /*
+     * Step through wildcards given on command line.
+     */
+    for (i = 2; i < argc; i ++) {
+        wildcard = argv[i];
+
+        /*
+         * Select files that can possibly match wildcard.
+         */
+        wildcardlen = wildcardlength (wildcard);
+        char wildcardend[wildcardlen];
+        if (wildcardlen > 0) {
+            memcpy (wildcardend, wildcard, wildcardlen);
+            for (i = wildcardlen; -- i >= 0;) {
+                if (++ wildcardend[i] != 0) break;
+            }
+
+            sqlite3_reset (fileselpfx);
+            rc = sqlite3_bind_text (fileselpfx, 1, wildcard, wildcardlen, SQLITE_TRANSIENT);
+            if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
+            rc = sqlite3_bind_text (fileselpfx, 2, wildcardend, wildcardlen, SQLITE_TRANSIENT);
+            if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
+
+            filesel = fileselpfx;
+            filesel_fileid = fileselpfx_fileid;
+            filesel_name   = fileselpfx_name;
+        } else {
+            filesel = fileselall;
+            filesel_fileid = fileselall_fileid;
+            filesel_name   = fileselall_name;
+        }
+
+        /*
+         * Step through list of files.
+         */
+        while ((rc = sqlite3_step (filesel)) == SQLITE_ROW) {
+            fileid = sqlite3_column_int64 (filesel, filesel_fileid);
+            name   = (char const *) sqlite3_column_text  (filesel, filesel_name);
+            if (memcmp (name, wildcard, wildcardlen) != 0) break;
+
+            /*
+             * See if name actually matches wildcard.
+             */
+            if (wildcardmatch (wildcard + wildcardlen, name + wildcardlen)) {
+                printf ("\n%s\n", name);
+
+                /*
+                 * See what savesets the file has been saved to.
+                 */
+                sqlite3_reset (instsel);
+                rc = sqlite3_bind_int64 (instsel, 1, fileid);
+                if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
+
+                /*
+                 * Print out saveset time and name.
+                 */
+                while ((rc = sqlite3_step (instsel)) == SQLITE_ROW) {
+                    seqno    =                sqlite3_column_int64 (instsel, instsel_seqno);
+                    savetime = (char const *) sqlite3_column_text  (instsel, instsel_time);
+                    savename = (char const *) sqlite3_column_text  (instsel, instsel_name);
+                    printf ("  %10lld  %s  %s\n", seqno, savetime, savename);
+                }
+
+                if (rc != SQLITE_DONE) {
+                    fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+                    sqlite3_close (histdb);
+                    return EX_HIST;
+                }
+            }
+        }
+
+        if (rc != SQLITE_DONE) {
+            fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+            sqlite3_close (histdb);
+            return EX_HIST;
+        }
+    }
+
+    sqlite3_finalize (fileselall);
+    sqlite3_finalize (fileselpfx);
+    sqlite3_finalize (instsel);
+    sqlite3_close (histdb);
+    return EX_OK;
+
+usage:
+    fprintf (stderr, "usage: ftbackup history <db> <wildcard>\n");
+    return EX_CMD;
+}
+
+/**
  * @brief Display license string.
  */
 static int cmd_license (int argc, char **argv)
@@ -2115,4 +2308,90 @@ char const *mystrerr (int err)
     if (err == MYEDATACMP) return "data compare mismatch";
     if (err == MYESIMRDER) return "simulated read error";
     return strerror (err);
+}
+
+/**
+ * @brief Find out how many chars at beginning of string are not wildcard.
+ * @param wild = wildcard
+ * @returns number of chars at beginning of wildcard
+ */
+int wildcardlength (char const *wild)
+{
+    int i;
+    for (i = 0;; i ++) {
+        char wc = wild[i];
+        if ((wc == 0) || (wc == '*') || (wc == '?') || (wc == '\\')) break;
+    }
+    return i;
+}
+
+/**
+ * @brief Match a filename against a wildcard.
+ * @param wild = wildcard to match
+ * @param name = filename to match
+ * @returns true: filename is matched by wildcard
+ *         false: does not match
+ */
+bool wildcardmatch (char const *wild, char const *name)
+{
+    int i = 0;
+    int j = 0;
+    int wcend = strlen (wild);
+    int nmend = strlen (name);
+
+    // keep going as long as there are wildcard chars to match
+    while (i < wcend) {
+        char wc = wild[i];
+
+        // '*' matches any number of (including zero) chars from name
+        if (wc == '*') {
+
+            // skip over all the '*'s in a row in wildcard
+            // '**' matches chars including '/' from name
+            // '*' matches chars excluding '/' from name
+            bool supa = false;
+            while (true) {
+                if (++ i >= wcend) return true;
+                if (wild[i] != '*') break;
+                supa = true;
+            }
+
+            // optimization: if no more '*'s in wildcard, then match the end of both strings.
+            if (strchr (wild + i, '*') == NULL) {
+                int k = nmend - (wcend - i);
+                if (j > k) return false;
+                if (!supa && (memchr (name + j, '/', k - j) != NULL)) return false;
+                return wildcardmatch (wild + i, name + k);
+            }
+
+            // try matching what's left of name with what's left in wildcard.
+            // take one char at a time from name and try to match.
+            // take '/' from name iff supa mode.
+            while (true) {
+                if (wildcardmatch (wild + i, name + j)) return true;
+                if (++ j >= nmend) return false;
+                if (!supa && (name[j-1] == '/')) return false;
+            }
+        }
+
+        // there's a wildcard char other than '*' to match
+        // if nothing left in name, it's no match
+        if (j >= nmend) return false;
+
+        // fail match if chars don't match
+        if (wc != '?') {
+            if (wc == '\\') {
+                if (++ i >= wcend) break;
+                wc = wild[i];
+            }
+
+            if (name[j] != wc) return false;
+        }
+
+        // those chars match, on to next chars
+        i ++;
+        j ++;
+    }
+
+    return j >= nmend;
 }

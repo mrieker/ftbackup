@@ -40,6 +40,8 @@ private:
 
 struct FTBWriter : FTBackup {
     bool opt_verbose;
+    char const *histdbname;
+    char const *histssname;
     int ioptions;
     int ooptions;
     int opt_verbsec;
@@ -60,6 +62,11 @@ private:
                         //  0: data to be left uncompressed, then free ()
                         //  1: data to be compressed, then free ()
                         //  2: data to be compressed, then frqueue.enqueue ()
+    };
+
+    struct HistSlot {
+        char *fname;
+        uint32_t seqno;
     };
 
     Block **xorblocks;
@@ -85,6 +92,7 @@ private:
 
     SlotQueue<void *>    frbufqueue;  // free buffers for reading files
     SlotQueue<ComprSlot> comprqueue;  // variable length data to be compressed and blocked
+    SlotQueue<HistSlot>  histqueue;   // filenames to write to history database
     SlotQueue<Block *>   frblkqueue;  // free blocks for writing to saveset
     SlotQueue<Block *>   writequeue;  // blocks to be written to saveset
 
@@ -99,6 +107,8 @@ private:
     void write_queue (void *buf, uint32_t len, int dty);
     static void *compr_thread_wrapper (void *ftbw);
     void *compr_thread ();
+    static void *hist_thread_wrapper (void *ftbw);
+    void *hist_thread ();
     static void *write_thread_wrapper (void *ftbw);
     void *write_thread ();
     Block *malloc_block ();

@@ -28,9 +28,9 @@
 
 How to install:
 
-  0) you may need to install compiler and compression library:
-       sudo yum install gcc gcc-c++ zlib-devel
-      or sudo apt-get install build-essential g++ zlib1g-dev
+  0) you may need to install compiler, compression and database:
+       sudo yum install gcc gcc-c++ zlib-devel sqlite-devel
+      or sudo apt-get install build-essential g++ zlib1g-dev sqlite3 libsqlite3-dev
   1) make -j8
   2) sudo cp ftbackup /usr/local/bin/
   3) sudo cp ftbackup.html /usr/local/bin/

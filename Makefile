@@ -1,4 +1,6 @@
 
+CFLAGS ?= -Wall -Werror -O2
+
 HAVEGITDIR := $(wildcard .git)
 ifeq ($(HAVEGITDIR),)
 	VERFILE     := $(wildcard *.ver)
@@ -31,11 +33,12 @@ DISTFILES := \
 SRCFILES := ftbackup.cpp ftbreader.cpp ftbwriter.cpp cryptopp562/libcryptopp.a
 
 ftbackup: $(SRCFILES) ftbackup.h ftbreader.h ftbwriter.h $(VERFILE)
-	cc -Wall -Werror -O2 -g -o ftbackup \
+	cc $(CFLAGS) -o ftbackup \
 		-DGITCOMMITHASH='"$(COMMITHASH)"' \
 		-DGITCOMMITDATE='"$(COMMITDATE)"' \
 		-DGITCOMMITCLEAN=$(COMMITCLEAN)   \
-		$(SRCFILES) -lpthread -lrt -lz -lstdc++ -lm
+		$(SRCFILES) \
+		-lsqlite3 -lpthread -lrt -lz -lstdc++ -lm
 
 clean:
 	rm -rf cryptopp562
