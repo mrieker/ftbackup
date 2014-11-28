@@ -1125,6 +1125,15 @@ void *FTBWriter::hist_thread ()
     }
 
     /*
+     * Lock database for efficiency.
+     */
+    rc = sqlite3_exec (histdb, "BEGIN TRANSACTION", NULL, NULL, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_exec(%s, BEGIN TRANSACTION) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        exit (EX_HIST);
+    }
+
+    /*
      * Keep processing incoming names until we get and end marker.
      */
     while (true) {
@@ -1215,6 +1224,12 @@ void *FTBWriter::hist_thread ()
         free (hs);
     }
     free (hs);
+
+    rc = sqlite3_exec (histdb, "COMMIT", NULL, NULL, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_exec(%s, COMMIT) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        exit (EX_HIST);
+    }
 
     sqlite3_finalize (fileins);
     sqlite3_finalize (filesel);
