@@ -59,6 +59,9 @@ static bool diff_special (char const *path1, char const *path2, struct stat *sta
 
 static int cmd_help (int argc, char **argv);
 static int cmd_history (int argc, char **argv);
+static bool sanitizedatestr (char *outstr, char const *instr);
+static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards, bool del);
+static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards);
 static int cmd_license (int argc, char **argv);
 static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv);
@@ -1386,22 +1389,271 @@ spawn:
  */
 static int cmd_history (int argc, char **argv)
 {
-    char const *fieldname, *histdbname, *name, *savename, *savetime, *wildcard;
+    bool delss, listss;
+    char const *histdbname;
+    char ssbefore[24], sssince[24];
+    char **wildcards;
+    int i, nwildcards, rc;
+
+    /*
+     * Parse command line
+     */
+    delss      = false;
+    listss     = false;
+    histdbname = NULL;
+    strcpy (ssbefore, "9999-99-99 99:99:99");
+    strcpy (sssince,  "0000-00-00 00:00:00");
+    wildcards  = (char **) alloca (argc * sizeof *wildcards);
+    nwildcards = 0;
+    for (i = 0; ++ i < argc;) {
+        if (argv[i][0] == '-') {
+            if (strcasecmp (argv[i], "-delss") == 0) {
+                if (listss) goto usage;
+                delss = true;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-listss") == 0) {
+                if (delss) goto usage;
+                listss = true;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-ssbefore") == 0) {
+                if (++ i >= argc) goto usage;
+                if (!sanitizedatestr (ssbefore, argv[i])) goto usage;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-sssince") == 0) {
+                if (++ i >= argc) goto usage;
+                if (!sanitizedatestr (sssince, argv[i])) goto usage;
+                continue;
+            }
+            fprintf (stderr, "ftbackup: unknown option %s\n", argv[i]);
+            goto usage;
+        }
+        if (histdbname == NULL) {
+            histdbname = argv[i];
+            continue;
+        }
+        wildcards[nwildcards++] = argv[i];
+    }
+
+          if (delss) rc = cmd_history_delss (sssince, ssbefore, histdbname, nwildcards, wildcards, true);
+    else if (listss) rc = cmd_history_delss (sssince, ssbefore, histdbname, nwildcards, wildcards, false);
+                else rc = cmd_history_list  (sssince, ssbefore, histdbname, nwildcards, wildcards);
+
+    if (rc != EX_CMD) return rc;
+
+usage:
+    fprintf (stderr, "usage: ftbackup history [-ssbefore 'yyyy-mm-dd hh:mm:ss'] [-sssince 'yyyy-mm-dd hh:mm:ss'] <histdb> [<filewildcard> ...]\n");
+    fprintf (stderr, "       ftbackup history [-ssbefore 'yyyy-mm-dd hh:mm:ss'] [-sssince 'yyyy-mm-dd hh:mm:ss'] <histdb> -delss <sswildcard> ...\n");
+    fprintf (stderr, "       ftbackup history [-ssbefore 'yyyy-mm-dd hh:mm:ss'] [-sssince 'yyyy-mm-dd hh:mm:ss'] <histdb> -listss [<sswildcard> ...]\n");
+    return EX_CMD;
+}
+
+static bool sanitizedatestr (char *outstr, char const *instr)
+{
+    char buff[12], *p, delim;
+    unsigned int len, val;
+
+    len = 4;
+    while (true) {
+        val = strtoul (instr, &p, 10);
+
+        sprintf (buff, "%u", val);
+        if (strlen (buff) > len) return false;
+
+        sprintf (buff, "%.*u", len, val);
+        memcpy (outstr, buff, len);
+        outstr += len;
+
+        while ((*p > 0) && (*p <= ' ')) p ++;
+        if (*p == 0) return true;
+
+        delim = *(outstr ++);
+        if ((delim != ' ') && (*(p ++) != delim)) return false;
+
+        len   = 2;
+        instr = p;
+    }
+}
+
+/**
+ * @brief Delete savesets from or List savesets in the database.
+ */
+static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards, bool del)
+{
+    char const *fieldname, *name, *time, *wildcard;
+    char delinsts[60], numstr[12];
+    char **queryparams;
+    char *wildcardend;
+    int i, nqueryparams, rc, savesel_ssid, savesel_name, savesel_time, wildcardlen;
+    sqlite3 *histdb;
+    sqlite3_int64 ssid;
+    sqlite3_stmt *savesel;
+    std::string querystr;
+
+    /*
+     * Open given database.
+     */
+    if (histdbname == NULL) return EX_CMD;
+    rc = sqlite3_open_v2 (histdbname, &histdb, del ? SQLITE_OPEN_READWRITE : SQLITE_OPEN_READONLY, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_open(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+
+    /*
+     * Pre-compile select statement that selects the files based on given wildcards.
+     */
+    querystr     = "SELECT ssid,name,time FROM savesets";
+    queryparams  = (char **) alloca (nwildcards * 2 * sizeof *queryparams);
+    nqueryparams = 0;
+
+    for (i = 0; i < nwildcards; i ++) {
+
+        /*
+         * Get wildcard from command line.
+         * If fixed part on the beginning is null, eg, '*.x',
+         * then use query to select all files.
+         */
+        wildcard = wildcards[i];
+        wildcardlen = wildcardlength (wildcard);
+        if (wildcardlen == 0) {
+            querystr = "SELECT ssid,name,time FROM savesets";
+            nqueryparams = 0;
+            break;
+        }
+
+        /*
+         * Fixed part non-null, eg, 'a' from 'a*', make it a range to select,
+         * eg, 'a*' => BETWEEN 'a' AND 'b'.
+         */
+        queryparams[nqueryparams] = strdup (wildcard);
+        queryparams[nqueryparams][wildcardlen] = 0;
+        if (nqueryparams == 0) {
+            querystr += " WHERE";
+        } else {
+            querystr += " OR";
+        }
+
+        wildcardend = strdup (wildcard);
+        do if (++ wildcardend[wildcardlen-1] != 0) break;
+        while (-- wildcardlen > 0);
+        wildcardend[wildcardlen] = 0;
+
+        if (wildcardlen == 0) {
+            querystr += " name >= ?";
+            sprintf (numstr, "%d", ++ nqueryparams);
+            querystr += numstr;
+        } else {
+            querystr += " name BETWEEN ?";
+            sprintf (numstr, "%d", ++ nqueryparams);
+            querystr += numstr;
+
+            queryparams[nqueryparams] = wildcardend;
+            querystr += " AND ?";
+            sprintf (numstr, "%d", ++ nqueryparams);
+            querystr += numstr;
+        }
+    }
+
+    querystr += " ORDER BY name";
+
+    rc = sqlite3_prepare_v2 (histdb, querystr.c_str (), -1, &savesel, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM savesets) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        exit (EX_HIST);
+    }
+
+    for (i = 0; i < nqueryparams; i ++) {
+        rc = sqlite3_bind_text (savesel, i + 1, queryparams[i], -1, free);
+        if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
+    }
+
+    for (savesel_name = 0;; savesel_name ++) {
+        fieldname = sqlite3_column_name (savesel, savesel_name);
+        if (strcmp (fieldname, "name") == 0) break;
+    }
+    for (savesel_ssid = 0;; savesel_ssid ++) {
+        fieldname = sqlite3_column_name (savesel, savesel_ssid);
+        if (strcmp (fieldname, "ssid") == 0) break;
+    }
+    for (savesel_time = 0;; savesel_time ++) {
+        fieldname = sqlite3_column_name (savesel, savesel_time);
+        if (strcmp (fieldname, "time") == 0) break;
+    }
+
+    /*
+     * Step through list of savesets.
+     */
+    while ((rc = sqlite3_step (savesel)) == SQLITE_ROW) {
+        ssid = sqlite3_column_int64 (savesel, savesel_ssid);
+        name = (char const *) sqlite3_column_text (savesel, savesel_name);
+        time = (char const *) sqlite3_column_text (savesel, savesel_time);
+        if (strcmp (time, sssince)  <  0) continue;
+        if (strcmp (time, ssbefore) >= 0) continue;
+
+        /*
+         * See if the saveset matches any of the wildcards given on the command line.
+         */
+        for (i = 0; i < nwildcards; i ++) {
+            wildcard = wildcards[i];
+            if (wildcardmatch (wildcard, name)) break;
+        }
+        if (((nwildcards == 0) && !del) || (i < nwildcards)) {
+            printf ("  %s  %s\n", time, name);
+
+            /*
+             * Maybe delete the saveset record.
+             * Triggers in the database will delete all other referenced records.
+             */
+            if (del) {
+                sprintf (delinsts, "DELETE FROM savesets WHERE ssid=%lld", ssid);
+                rc = sqlite3_exec (histdb, delinsts, NULL, NULL, NULL);
+                if (rc != SQLITE_OK) {
+                    fprintf (stderr, "ftbackup: sqlite3_exec(%s, DELETE FROM savesets) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+                    sqlite3_close (histdb);
+                    return EX_HIST;
+                }
+            }
+        }
+    }
+
+    if (rc != SQLITE_DONE) {
+        fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM savesets) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        return EX_HIST;
+    }
+
+    sqlite3_finalize (savesel);
+    sqlite3_close (histdb);
+
+    return EX_OK;
+}
+
+/**
+ * @brief List files in the database.
+ */
+static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards)
+{
+    bool printed;
+    char const *fieldname, *name, *savename, *savetime, *wildcard;
     char numstr[12];
     char **queryparams;
     char *wildcardend;
-    int filesel_fileid, filesel_name, i, instsel_name, instsel_seqno, instsel_time;
+    int filesel_fileid, filesel_name, i, instsel_name, instsel_time;
     int nqueryparams, rc, wildcardlen;
     sqlite3 *histdb;
-    sqlite3_int64 fileid, seqno;
+    sqlite3_int64 fileid;
     sqlite3_stmt *filesel, *instsel;
     std::string querystr;
 
     /*
      * Open given database.
      */
-    if (argc < 2) goto usage;
-    histdbname = argv[1];
+    if (histdbname == NULL) return EX_CMD;
     rc = sqlite3_open_v2 (histdbname, &histdb, SQLITE_OPEN_READONLY, NULL);
     if (rc != SQLITE_OK) {
         fprintf (stderr, "ftbackup: sqlite3_open(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
@@ -1413,17 +1665,17 @@ static int cmd_history (int argc, char **argv)
      * Pre-compile select statement that selects the files based on given wildcards.
      */
     querystr     = "SELECT fileid,name FROM files";
-    queryparams  = (char **) alloca (argc * 2 * sizeof *queryparams);
+    queryparams  = (char **) alloca (nwildcards * 2 * sizeof *queryparams);
     nqueryparams = 0;
 
-    for (i = 2; i < argc; i ++) {
+    for (i = 0; i < nwildcards; i ++) {
 
         /*
          * Get wildcard from command line.
          * If fixed part on the beginning is null, eg, '*.x',
          * then use query to select all files.
          */
-        wildcard = argv[i];
+        wildcard = wildcards[i];
         wildcardlen = wildcardlength (wildcard);
         if (wildcardlen == 0) {
             querystr = "SELECT fileid,name FROM files";
@@ -1491,7 +1743,7 @@ static int cmd_history (int argc, char **argv)
      * Pre-compile select statement that selects savesets for a file.
      */
     rc = sqlite3_prepare_v2 (histdb,
-        "SELECT name,seqno,time FROM instances,savesets WHERE instances.fileid=?1 AND savesets.ssid=instances.ssid ORDER BY time DESC",
+        "SELECT name,time FROM instances,savesets WHERE instances.fileid=?1 AND savesets.ssid=instances.ssid ORDER BY time DESC",
         -1, &instsel, NULL);
     if (rc != SQLITE_OK) {
         fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
@@ -1501,10 +1753,6 @@ static int cmd_history (int argc, char **argv)
     for (instsel_name = 0;; instsel_name ++) {
         fieldname = sqlite3_column_name (instsel, instsel_name);
         if (strcmp (fieldname, "name") == 0) break;
-    }
-    for (instsel_seqno = 0;; instsel_seqno ++) {
-        fieldname = sqlite3_column_name (instsel, instsel_seqno);
-        if (strcmp (fieldname, "seqno") == 0) break;
     }
     for (instsel_time = 0;; instsel_time ++) {
         fieldname = sqlite3_column_name (instsel, instsel_time);
@@ -1521,12 +1769,11 @@ static int cmd_history (int argc, char **argv)
         /*
          * See if the file matches any of the wildcards given on the command line.
          */
-        for (i = 2; i < argc; i ++) {
-            wildcard = argv[i];
+        for (i = 0; i < nwildcards; i ++) {
+            wildcard = wildcards[i];
             if (wildcardmatch (wildcard, name)) break;
         }
-        if (i < argc) {
-            printf ("\n%s\n", name);
+        if ((nwildcards == 0) || (i < nwildcards)) {
 
             /*
              * See what savesets the file has been saved to.
@@ -1538,11 +1785,18 @@ static int cmd_history (int argc, char **argv)
             /*
              * Print out saveset time and name.
              */
+            printed = false;
             while ((rc = sqlite3_step (instsel)) == SQLITE_ROW) {
-                seqno    =                sqlite3_column_int64 (instsel, instsel_seqno);
                 savetime = (char const *) sqlite3_column_text  (instsel, instsel_time);
                 savename = (char const *) sqlite3_column_text  (instsel, instsel_name);
-                printf ("  %10lld  %s  %s\n", seqno, savetime, savename);
+                if (strcmp (savetime, sssince)  <  0) continue;
+                if (strcmp (savetime, ssbefore) >= 0) continue;
+
+                if (!printed) {
+                    printf ("\n%s\n", name);
+                    printed = true;
+                }
+                printf ("  %s  %s\n", savetime, savename);
             }
 
             if (rc != SQLITE_DONE) {
@@ -1563,10 +1817,6 @@ static int cmd_history (int argc, char **argv)
     sqlite3_finalize (instsel);
     sqlite3_close (histdb);
     return EX_OK;
-
-usage:
-    fprintf (stderr, "usage: ftbackup history <db> <wildcard> ...\n");
-    return EX_CMD;
 }
 
 /**

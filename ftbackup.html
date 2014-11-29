@@ -162,7 +162,7 @@
                         written two at a time will be done.
                 </UL>
             <LI><TT>ftbackup backup -blocksize 65536 -encrypt :idea @backup.key
-                -history /var/log/root_disk.hist -idirect -odirect 
+                -history /var/log/root_disk.hist -idirect -odirect
                 -record /var/log/root_disk.reco -segsize
                 $((1024*1024*1024)) -verbsec 30 -xor 63,2 /sdd1/root.full.ftb/
                 /</TT>
@@ -179,7 +179,7 @@
                     <LI>The saveset files are encrypted using <TT>IDEA</TT> and
                         <TT>SHA1</TT> with the key given in file
                         <TT>backup.key</TT>.</LI>
-                    <LI>Each filename as it is backed up is written to 
+                    <LI>Each filename as it is backed up is written to
                         <TT>/var/log/root_disk.hist</TT> SQLite3 database
                     <LI>Record the date/time the backup was started in
                         <TT>/var/log/root_disk.reco</TT> so that an incremental
@@ -253,21 +253,75 @@
             <LI><B><I>path2</I></B> : path of other directory to compare to</LI>
         </UL>
         <HR>
-        <H3>ftbackup history <I>histdb</I> <I>wildcard</I> ...</H3>
+        <H3>ftbackup history <I>options</I> <I>histdb</I> [<I>wildcard</I>
+            ...]</H3>
         <UL>
+            <LI><B><I>options</I></B>
+                <UL>
+                    <LI><B>-ssbefore '<I>yyyy-mm-dd hh:mm:ss</I>'</B> - only
+                        consider savesets created before the indicated UTC
+                        date/time
+                    <LI><B>-sssince '<I>yyyy-mm-dd hh:mm:ss</I>'</B> - only
+                        consider savesets created since the indicated UTC
+                        date/time
+                </UL>
+            </LI>
             <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
                 -history option on <B>backup</B> command line</LI>
-            <LI><B><I>wildcard</I></B> - wildcard to search for</LI>
+            <LI><B><I>wildcard</I></B> - wildcard to search for, default is to
+                list all files in the database</LI>
         </UL>
         Wildcards:
         <UL>
             <LI>The given <I>wildcard</I> can contain <B><TT>*</TT></B> or
                 <B><TT>?</TT></B> wildcard characters.  A <B><TT>**</TT></B>
                 wildcard matches directory boundaries as well, eg,
-                <TT>**.tmp</TT> matches all files in the tree ending in
-                <TT>.tmp</TT>, whereas <TT>*.tmp</TT> only matches files in the
-                one directory file ending in <TT>.tmp</TT>.</LI>
-            <LI>Use <TT>'**'</TT> to select all files in the database.</LI>
+                <TT>'**.tmp'</TT> matches all files in the tree ending in
+                <TT>.tmp</TT>, whereas <TT>'*.tmp'</TT> only matches files in
+                the one directory file ending in <TT>.tmp</TT>.</LI>
+            <LI>Use something like apostrophes (<TT>'</TT>) to protect the
+                wildcard from the shell attempting to process it.</LI>
+        </UL>
+        <H3>ftbackup history -delss <I>options</I> <I>histdb</I>
+            <I>wildcard</I> ...</H3>
+        <UL>
+            <LI><B><I>options</I></B>
+                <UL>
+                    <LI><B>-ssbefore '<I>yyyy-mm-dd hh:mm:ss</I>'</B> - only
+                        consider savesets created before the indicated UTC
+                        date/time
+                    <LI><B>-sssince '<I>yyyy-mm-dd hh:mm:ss</I>'</B> - only
+                        consider savesets created since the indicated UTC
+                        date/time
+                </UL>
+            </LI>
+            <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
+                -history option on <B>backup</B> command line</LI>
+            <LI><B><I>wildcard</I></B> - wildcard of savesets to delete</LI>
+        </UL>
+        Note:
+        <UL>
+            <LI>The shell <B><TT>sqlite3</TT></B> command can be used to manage
+                the <B><I>histdb</I></B> database if needed beyond what is
+                given here.</LI>
+        </UL>
+        <H3>ftbackup history -listss <I>options</I> <I>histdb</I>
+            [<I>wildcard</I> ...]</H3>
+        <UL>
+            <LI><B><I>options</I></B>
+                <UL>
+                    <LI><B>-ssbefore '<I>yyyy-mm-dd hh:mm:ss</I>'</B> - only
+                        consider savesets created before the indicated UTC
+                        date/time
+                    <LI><B>-sssince '<I>yyyy-mm-dd hh:mm:ss</I>'</B> - only
+                        consider savesets created since the indicated UTC
+                        date/time
+                </UL>
+            </LI>
+            <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
+                -history option on <B>backup</B> command line</LI>
+            <LI><B><I>wildcard</I></B> - wildcard of savesets to list, default
+                is to list all savesets in the database</LI>
         </UL>
         <HR>
         <H3>ftbackup list <I>options</I> <I>saveset</I></H3>
