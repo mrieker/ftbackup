@@ -1049,18 +1049,59 @@ void *FTBWriter::hist_thread ()
         sqlite3_close (histdb);
         exit (EX_HIST);
     }
+
+    /*
+     * If newly created, create tables and triggers.
+     */
     rc = sqlite3_exec (histdb,
-        "CREATE TABLE IF NOT EXISTS savesets (ssid INTEGER PRIMARY KEY, name NOT NULL, time NOT NULL);"
-        "CREATE TABLE IF NOT EXISTS files (fileid INTEGER PRIMARY KEY, name NOT NULL UNIQUE);"
+        "CREATE TABLE IF NOT EXISTS files (fileid INTEGER PRIMARY KEY AUTOINCREMENT, name NOT NULL UNIQUE);"
+
+        "CREATE TABLE IF NOT EXISTS savesets (ssid INTEGER PRIMARY KEY AUTOINCREMENT, name NOT NULL, time NOT NULL);"
+
         "CREATE TABLE IF NOT EXISTS instances ("
             "fileid NOT NULL, "
             "ssid NOT NULL, "
             "seqno NOT NULL, "
-            "PRIMARY KEY (fileid, ssid),"
-            "FOREIGN KEY (fileid) REFERENCES files (fileid),"
-            "FOREIGN KEY (ssid) REFERENCES savesets (ssid) ON DELETE CASCADE"
-            ")",
+            "PRIMARY KEY (fileid, ssid));"
+
+        "CREATE INDEX IF NOT EXISTS idx_inst_fileid ON instances (fileid);"
+        "CREATE INDEX IF NOT EXISTS idx_inst_ssid ON instances (ssid);"
+
+        // block changing inter-table id numbers to maintain references
+        "CREATE TRIGGER IF NOT EXISTS upd_fileid_block "
+            "BEFORE UPDATE OF fileid ON files "
+            "BEGIN SELECT RAISE(ABORT,'files.fileid immutable'); END;"
+
+        "CREATE TRIGGER IF NOT EXISTS upd_ssid_block "
+            "BEFORE UPDATE OF ssid ON savesets "
+            "BEGIN SELECT RAISE(ABORT,'savesets.ssid immutable'); END;"
+
+        "CREATE TRIGGER IF NOT EXISTS upd_inst_fileid_block "
+            "BEFORE UPDATE OF fileid ON instances "
+            "BEGIN SELECT RAISE(ABORT,'instances.fileid immutable'); END;"
+
+        "CREATE TRIGGER IF NOT EXISTS upd_inst_ssid_block "
+            "BEFORE UPDATE OF ssid ON instances "
+            "BEGIN SELECT RAISE(ABORT,'instances.ssid immutable'); END;"
+
+        // delete associated instance records whenever a file record is deleted
+        "CREATE TRIGGER IF NOT EXISTS del_file_dangling_insts "
+            "AFTER DELETE ON files "
+            "BEGIN DELETE FROM instances WHERE instances.fileid=OLD.fileid; END;"
+
+        // delete associated instance records when a saveset record is deleted
+        "CREATE TRIGGER IF NOT EXISTS del_save_dangling_insts "
+            "AFTER DELETE ON savesets "
+            "BEGIN DELETE FROM instances WHERE instances.ssid=OLD.ssid; END;"
+
+        // delete associated unreferenced file record when an instance record is deleted
+        "CREATE TRIGGER IF NOT EXISTS del_unrefd_files "
+            "AFTER DELETE ON instances "
+            "WHEN NOT EXISTS (SELECT * FROM instances WHERE instances.fileid=OLD.fileid) "
+            "BEGIN DELETE FROM files WHERE files.fileid=OLD.fileid; END",
+
         NULL, NULL, &sqlerr);
+
     if (rc != SQLITE_OK) {
         fprintf (stderr, "ftbackup: sqlite3_exec(%s, CREATE TABLE) error: %s\n", histdbname, sqlerr);
         sqlite3_free (sqlerr);
