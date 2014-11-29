@@ -1387,12 +1387,15 @@ spawn:
 static int cmd_history (int argc, char **argv)
 {
     char const *fieldname, *histdbname, *name, *savename, *savetime, *wildcard;
-    int filesel_fileid, filesel_name, fileselall_fileid, fileselall_name;
-    int fileselpfx_fileid, fileselpfx_name, i, instsel_name, instsel_seqno, instsel_time;
-    int rc, wildcardlen;
+    char numstr[12];
+    char **queryparams;
+    char *wildcardend;
+    int filesel_fileid, filesel_name, i, instsel_name, instsel_seqno, instsel_time;
+    int nqueryparams, rc, wildcardlen;
     sqlite3 *histdb;
     sqlite3_int64 fileid, seqno;
-    sqlite3_stmt *filesel, *fileselall, *fileselpfx, *instsel;
+    sqlite3_stmt *filesel, *instsel;
+    std::string querystr;
 
     /*
      * Open given database.
@@ -1407,42 +1410,80 @@ static int cmd_history (int argc, char **argv)
     }
 
     /*
-     * Pre-compile select statement that selects all files.
+     * Pre-compile select statement that selects the files based on given wildcards.
      */
-    rc = sqlite3_prepare_v2 (histdb,
-        "SELECT fileid,name FROM files ORDER BY name",
-        -1, &fileselall, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
-        exit (EX_HIST);
-    }
-    for (fileselall_fileid = 0;; fileselall_fileid ++) {
-        fieldname = sqlite3_column_name (fileselall, fileselall_fileid);
-        if (strcmp (fieldname, "fileid") == 0) break;
-    }
-    for (fileselall_name = 0;; fileselall_name ++) {
-        fieldname = sqlite3_column_name (fileselall, fileselall_name);
-        if (strcmp (fieldname, "name") == 0) break;
+    querystr     = "SELECT fileid,name FROM files";
+    queryparams  = (char **) alloca (argc * 2 * sizeof *queryparams);
+    nqueryparams = 0;
+
+    for (i = 2; i < argc; i ++) {
+
+        /*
+         * Get wildcard from command line.
+         * If fixed part on the beginning is null, eg, '*.x',
+         * then use query to select all files.
+         */
+        wildcard = argv[i];
+        wildcardlen = wildcardlength (wildcard);
+        if (wildcardlen == 0) {
+            querystr = "SELECT fileid,name FROM files";
+            nqueryparams = 0;
+            break;
+        }
+
+        /*
+         * Fixed part non-null, eg, 'a' from 'a*', make it a range to select,
+         * eg, 'a*' => BETWEEN 'a' AND 'b'.
+         */
+        queryparams[nqueryparams] = strdup (wildcard);
+        queryparams[nqueryparams][wildcardlen] = 0;
+        if (nqueryparams == 0) {
+            querystr += " WHERE";
+        } else {
+            querystr += " OR";
+        }
+
+        wildcardend = strdup (wildcard);
+        do if (++ wildcardend[wildcardlen-1] != 0) break;
+        while (-- wildcardlen > 0);
+        wildcardend[wildcardlen] = 0;
+
+        if (wildcardlen == 0) {
+            querystr += " name >= ?";
+            sprintf (numstr, "%d", ++ nqueryparams);
+            querystr += numstr;
+        } else {
+            querystr += " name BETWEEN ?";
+            sprintf (numstr, "%d", ++ nqueryparams);
+            querystr += numstr;
+
+            queryparams[nqueryparams] = wildcardend;
+            querystr += " AND ?";
+            sprintf (numstr, "%d", ++ nqueryparams);
+            querystr += numstr;
+        }
     }
 
-    /*
-     * Pre-compile select statement that selects a range of files.
-     */
-    rc = sqlite3_prepare_v2 (histdb,
-        "SELECT fileid,name FROM files WHERE name BETWEEN ?1 AND ?2 ORDER BY name",
-        -1, &fileselpfx, NULL);
+    querystr += " ORDER BY name";
+
+    rc = sqlite3_prepare_v2 (histdb, querystr.c_str (), -1, &filesel, NULL);
     if (rc != SQLITE_OK) {
         fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
         sqlite3_close (histdb);
         exit (EX_HIST);
     }
-    for (fileselpfx_fileid = 0;; fileselpfx_fileid ++) {
-        fieldname = sqlite3_column_name (fileselpfx, fileselpfx_fileid);
+
+    for (i = 0; i < nqueryparams; i ++) {
+        rc = sqlite3_bind_text (filesel, i + 1, queryparams[i], -1, free);
+        if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
+    }
+
+    for (filesel_fileid = 0;; filesel_fileid ++) {
+        fieldname = sqlite3_column_name (filesel, filesel_fileid);
         if (strcmp (fieldname, "fileid") == 0) break;
     }
-    for (fileselpfx_name = 0;; fileselpfx_name ++) {
-        fieldname = sqlite3_column_name (fileselpfx, fileselpfx_name);
+    for (filesel_name = 0;; filesel_name ++) {
+        fieldname = sqlite3_column_name (filesel, filesel_name);
         if (strcmp (fieldname, "name") == 0) break;
     }
 
@@ -1471,91 +1512,60 @@ static int cmd_history (int argc, char **argv)
     }
 
     /*
-     * Step through wildcards given on command line.
+     * Step through list of files.
      */
-    for (i = 2; i < argc; i ++) {
-        wildcard = argv[i];
+    while ((rc = sqlite3_step (filesel)) == SQLITE_ROW) {
+        fileid = sqlite3_column_int64 (filesel, filesel_fileid);
+        name   = (char const *) sqlite3_column_text (filesel, filesel_name);
 
         /*
-         * Select files that can possibly match wildcard.
+         * See if the file matches any of the wildcards given on the command line.
          */
-        wildcardlen = wildcardlength (wildcard);
-        char wildcardend[wildcardlen];
-        if (wildcardlen > 0) {
-            memcpy (wildcardend, wildcard, wildcardlen);
-            for (i = wildcardlen; -- i >= 0;) {
-                if (++ wildcardend[i] != 0) break;
-            }
-
-            sqlite3_reset (fileselpfx);
-            rc = sqlite3_bind_text (fileselpfx, 1, wildcard, wildcardlen, SQLITE_TRANSIENT);
-            if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
-            rc = sqlite3_bind_text (fileselpfx, 2, wildcardend, wildcardlen, SQLITE_TRANSIENT);
-            if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
-
-            filesel = fileselpfx;
-            filesel_fileid = fileselpfx_fileid;
-            filesel_name   = fileselpfx_name;
-        } else {
-            filesel = fileselall;
-            filesel_fileid = fileselall_fileid;
-            filesel_name   = fileselall_name;
+        for (i = 2; i < argc; i ++) {
+            wildcard = argv[i];
+            if (wildcardmatch (wildcard, name)) break;
         }
-
-        /*
-         * Step through list of files.
-         */
-        while ((rc = sqlite3_step (filesel)) == SQLITE_ROW) {
-            fileid = sqlite3_column_int64 (filesel, filesel_fileid);
-            name   = (char const *) sqlite3_column_text  (filesel, filesel_name);
-            if (memcmp (name, wildcard, wildcardlen) != 0) break;
+        if (i < argc) {
+            printf ("\n%s\n", name);
 
             /*
-             * See if name actually matches wildcard.
+             * See what savesets the file has been saved to.
              */
-            if (wildcardmatch (wildcard + wildcardlen, name + wildcardlen)) {
-                printf ("\n%s\n", name);
+            sqlite3_reset (instsel);
+            rc = sqlite3_bind_int64 (instsel, 1, fileid);
+            if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
 
-                /*
-                 * See what savesets the file has been saved to.
-                 */
-                sqlite3_reset (instsel);
-                rc = sqlite3_bind_int64 (instsel, 1, fileid);
-                if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
-
-                /*
-                 * Print out saveset time and name.
-                 */
-                while ((rc = sqlite3_step (instsel)) == SQLITE_ROW) {
-                    seqno    =                sqlite3_column_int64 (instsel, instsel_seqno);
-                    savetime = (char const *) sqlite3_column_text  (instsel, instsel_time);
-                    savename = (char const *) sqlite3_column_text  (instsel, instsel_name);
-                    printf ("  %10lld  %s  %s\n", seqno, savetime, savename);
-                }
-
-                if (rc != SQLITE_DONE) {
-                    fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-                    sqlite3_close (histdb);
-                    return EX_HIST;
-                }
+            /*
+             * Print out saveset time and name.
+             */
+            while ((rc = sqlite3_step (instsel)) == SQLITE_ROW) {
+                seqno    =                sqlite3_column_int64 (instsel, instsel_seqno);
+                savetime = (char const *) sqlite3_column_text  (instsel, instsel_time);
+                savename = (char const *) sqlite3_column_text  (instsel, instsel_name);
+                printf ("  %10lld  %s  %s\n", seqno, savetime, savename);
             }
-        }
 
-        if (rc != SQLITE_DONE) {
-            fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-            sqlite3_close (histdb);
-            return EX_HIST;
+            if (rc != SQLITE_DONE) {
+                fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+                sqlite3_close (histdb);
+                return EX_HIST;
+            }
         }
     }
 
-    sqlite3_finalize (fileselall);
-    sqlite3_finalize (fileselpfx);
+    if (rc != SQLITE_DONE) {
+        fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        sqlite3_close (histdb);
+        return EX_HIST;
+    }
+
+    sqlite3_finalize (filesel);
     sqlite3_finalize (instsel);
     sqlite3_close (histdb);
     return EX_OK;
 
 usage:
-    fprintf (stderr, "usage: ftbackup history <db> <wildcard>\n");
+    fprintf (stderr, "usage: ftbackup history <db> <wildcard> ...\n");
     return EX_CMD;
 }
 
@@ -2347,12 +2357,10 @@ bool wildcardmatch (char const *wild, char const *name)
         if (wc == '*') {
 
             // skip over all the '*'s in a row in wildcard
-            // '**' matches chars including '/' from name
-            // '*' matches chars excluding '/' from name
+            // '**' matches chars including '/' from name (supa = true)
+            // '*' matches chars excluding '/' from name (supa = false)
             bool supa = false;
-            while (true) {
-                if (++ i >= wcend) return true;
-                if (wild[i] != '*') break;
+            while ((++ i < wcend) && (wild[i] == '*')) {
                 supa = true;
             }
 
@@ -2367,11 +2375,11 @@ bool wildcardmatch (char const *wild, char const *name)
             // try matching what's left of name with what's left in wildcard.
             // take one char at a time from name and try to match.
             // take '/' from name iff supa mode.
-            while (true) {
-                if (wildcardmatch (wild + i, name + j)) return true;
+            while (!wildcardmatch (wild + i, name + j)) {
                 if (++ j >= nmend) return false;
                 if (!supa && (name[j-1] == '/')) return false;
             }
+            return true;
         }
 
         // there's a wildcard char other than '*' to match
