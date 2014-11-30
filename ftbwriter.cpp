@@ -1055,6 +1055,7 @@ void *FTBWriter::hist_thread ()
             "seqno NOT NULL, "
             "PRIMARY KEY (fileid, ssid));"
 
+        "CREATE INDEX IF NOT EXISTS idx_file_name ON files (name);"
         "CREATE INDEX IF NOT EXISTS idx_inst_fileid ON instances (fileid);"
         "CREATE INDEX IF NOT EXISTS idx_inst_ssid ON instances (ssid);"
 
