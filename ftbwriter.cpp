@@ -49,8 +49,6 @@ FTBWriter::FTBWriter ()
     sssegname      = NULL;
     inodesdevno    = 0;
     noncefile      = NULL;
-    histqueue_head = NULL;
-    histqueue_tail = &histqueue_head;
     inodeslist     = NULL;
     ssfd           = -1;
     skipnames      = NULL;
@@ -65,12 +63,10 @@ FTBWriter::FTBWriter ()
     inodesmtim     = NULL;
     memset (&zstrm, 0, sizeof zstrm);
 
-    pthread_cond_init  (&histqueue_cond,  NULL);
-    pthread_mutex_init (&histqueue_mutex, NULL);
-
     frbufqueue = SlotQueue<void *> ();
     comprqueue = SlotQueue<ComprSlot> ();
     frblkqueue = SlotQueue<Block *> ();
+    histqueue  = SlotQueue<HistSlot> ();
     writequeue = SlotQueue<Block *> ();
 }
 
@@ -78,6 +74,7 @@ FTBWriter::~FTBWriter ()
 {
     Block *b;
     ComprSlot cs;
+    HistSlot hs;
     uint32_t i;
     void *f;
 
@@ -120,6 +117,10 @@ FTBWriter::~FTBWriter ()
 
     while (frblkqueue.trydequeue (&b)) {
         free (b);
+    }
+
+    while (histqueue.trydequeue (&hs)) {
+        if (hs.fname != NULL) free (hs.fname);
     }
 
     while (writequeue.trydequeue (&b)) {
@@ -866,6 +867,7 @@ void *FTBWriter::compr_thread_wrapper (void *ftbw)
 void *FTBWriter::compr_thread ()
 {
     Block *block;
+    HistSlot hs;
     int dty, i, rc;
     ComprSlot slot;
     uint32_t bs, len;
@@ -952,17 +954,10 @@ void *FTBWriter::compr_thread ()
 
                     // if writing history, queue to history writing thread
                     if ((histdbname != NULL) && (((Header *)buf)->nameln > 0)) {
-                        char *fname = ((Header *)buf)->name;
-                        int fnamelen = strlen (fname);
-                        HistSlot *hs = (HistSlot *) malloc (fnamelen + sizeof *hs);
-                        hs->next  = NULL;
-                        hs->seqno = block->seqno;
-                        memcpy (hs->fname, fname, ++ fnamelen);
-                        pthread_mutex_lock (&histqueue_mutex);
-                        if (histqueue_head == NULL) pthread_cond_broadcast (&histqueue_cond);
-                        *histqueue_tail = hs;
-                        histqueue_tail  = &hs->next;
-                        pthread_mutex_unlock (&histqueue_mutex);
+                        hs.fname = strdup (((Header *)buf)->name);
+                        hs.seqno = block->seqno;
+                        if (hs.fname == NULL) NOMEM ();
+                        histqueue.enqueue (hs);
                     }
                 }
 
@@ -1004,13 +999,9 @@ void *FTBWriter::compr_thread ()
      * Tell history thread to close database and exit.
      */
     if (histdbname != NULL) {
-        pthread_mutex_lock (&histqueue_mutex);
-        pthread_cond_broadcast (&histqueue_cond);
-        HistSlot *hs = (HistSlot *) malloc (sizeof *hs);
-        memset (hs, 0, sizeof *hs);
-        *histqueue_tail = hs;
-        histqueue_tail = &hs->next;
-        pthread_mutex_unlock (&histqueue_mutex);
+        hs.fname = NULL;
+        hs.seqno = 0;
+        histqueue.enqueue (hs);
     }
 
     /*
@@ -1031,7 +1022,7 @@ void *FTBWriter::hist_thread ()
 {
     char *sqlerr;
     char const *fieldname;
-    HistSlot *hs;
+    HistSlot hs;
     int filesel_fileid, rc;
     sqlite3 *histdb;
     sqlite3_int64 fileid, ssid;
@@ -1067,7 +1058,7 @@ void *FTBWriter::hist_thread ()
         "CREATE INDEX IF NOT EXISTS idx_inst_fileid ON instances (fileid);"
         "CREATE INDEX IF NOT EXISTS idx_inst_ssid ON instances (ssid);"
 
-        // block changing inter-table id numbers to maintain references
+        // disallow changing inter-table id numbers to maintain references
         "CREATE TRIGGER IF NOT EXISTS upd_fileid_block "
             "BEFORE UPDATE OF fileid ON files "
             "BEGIN SELECT RAISE(ABORT,'files.fileid immutable'); END;"
@@ -1183,16 +1174,9 @@ void *FTBWriter::hist_thread ()
          * Dequeue an entry to process.
          */
         wht_runtime += getruntime ();
-        pthread_mutex_lock (&histqueue_mutex);
-        while ((hs = histqueue_head) == NULL) {
-            pthread_cond_wait (&histqueue_cond, &histqueue_mutex);
-        }
-        if ((histqueue_head = hs->next) == NULL) {
-            histqueue_tail = &histqueue_head;
-        }
-        pthread_mutex_unlock (&histqueue_mutex);
+        hs = histqueue.dequeue ();
         wht_runtime -= getruntime ();
-        if (hs->fname[0] == 0) break;
+        if (hs.fname == NULL) break;
 
         /*
          * See if record already exists with the filename.
@@ -1200,7 +1184,7 @@ void *FTBWriter::hist_thread ()
          * If not, insert new record and get corresponding fileid.
          */
         sqlite3_reset (filesel);
-        rc = sqlite3_bind_text (filesel, 1, hs->fname, -1, SQLITE_TRANSIENT);
+        rc = sqlite3_bind_text (filesel, 1, hs.fname, -1, SQLITE_TRANSIENT);
         if (rc != SQLITE_OK) INTERR (sqlite3_bind_text,  rc);
         rc = sqlite3_step (filesel);
         switch (rc) {
@@ -1218,7 +1202,7 @@ void *FTBWriter::hist_thread ()
              */
             case SQLITE_DONE: {
                 sqlite3_reset (fileins);
-                rc = sqlite3_bind_text (fileins, 1, hs->fname, -1, SQLITE_TRANSIENT);
+                rc = sqlite3_bind_text (fileins, 1, hs.fname, -1, SQLITE_TRANSIENT);
                 if (rc != SQLITE_OK) INTERR (sqlite3_bind_text,  rc);
                 rc = sqlite3_step (fileins);
                 if (rc != SQLITE_DONE) {
@@ -1249,7 +1233,7 @@ void *FTBWriter::hist_thread ()
         if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
         rc = sqlite3_bind_int64 (inststmt, 2, ssid);
         if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
-        rc = sqlite3_bind_int64 (inststmt, 3, (uint64_t) hs->seqno);
+        rc = sqlite3_bind_int64 (inststmt, 3, (uint64_t) hs.seqno);
         if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
 
         rc = sqlite3_step (inststmt);
@@ -1262,16 +1246,21 @@ void *FTBWriter::hist_thread ()
         /*
          * Entry all processed.
          */
-        free (hs);
+        free (hs.fname);
     }
-    free (hs);
 
+    /*
+     * All done, flush database changes to file.
+     */
     rc = sqlite3_exec (histdb, "COMMIT", NULL, NULL, NULL);
     if (rc != SQLITE_OK) {
         fprintf (stderr, "ftbackup: sqlite3_exec(%s, COMMIT) error: %s\n", histdbname, sqlite3_errmsg (histdb));
         exit (EX_HIST);
     }
 
+    /*
+     * Close database.
+     */
     sqlite3_finalize (fileins);
     sqlite3_finalize (filesel);
     sqlite3_finalize (inststmt);
