@@ -19,6 +19,9 @@
 
 #include "ftbackup.h"
 
+#define FTBREADER_SELECT_SKIP ((char const *)1)
+#define FTBREADER_SELECT_DONE ((char const *)2)
+
 struct FTBReader : FTBackup {
     bool opt_incrmntl;
     bool opt_overwrite;
@@ -28,8 +31,8 @@ struct FTBReader : FTBackup {
 
     FTBReader ();
     ~FTBReader ();
-    int read_saveset (char const *ssname, char const *srcprefix, char const *dstprefix);
-    virtual char *maybe_output_listing (char *dstname, Header *hdr) =0;
+    int read_saveset (char const *ssname);
+    virtual char const *select_file (Header const *hdr) =0;
     bool decrypt_block (Block *block, uint32_t bs);
 
 private:
@@ -71,6 +74,22 @@ private:
     LinkedBlock *read_or_recover_block ();
     long wrapped_pread (void *buf, long len, uint64_t pos);
     long handle_pread_error (void *buf, long len, uint64_t pos);
+};
+
+struct FTBReadMapper : FTBReader {
+    bool opt_verbose;
+    char const *dstprefix;
+    char const *srcprefix;
+    int opt_verbsec;
+
+    FTBReadMapper ();
+    ~FTBReadMapper ();
+    virtual char const *select_file (Header const *hdr);
+
+private:
+    char *dstnamebuf;
+    int dstnameall;
+    time_t lastverbsec;
 };
 
 #endif

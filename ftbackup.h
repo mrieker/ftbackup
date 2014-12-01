@@ -115,7 +115,7 @@ struct FTBackup {
     FTBackup ();
     ~FTBackup ();
 
-    static void print_header (FILE *out, Header *hdr, char const *name);
+    static void print_header (FILE *out, Header const *hdr, char const *name);
     bool blockisvalid (Block *block);
     bool blockbaseisvalid (Block *block);
     int decodecipherargs (int argc, char **argv, int i, bool enc);

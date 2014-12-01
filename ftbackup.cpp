@@ -445,14 +445,6 @@ static uint64_t read_nanos_from_file (char const *name)
 /**
  * @brief Compare saveset to filesystem.
  */
-struct FTBComparer : FTBReader {
-    bool opt_verbose;
-    int opt_verbsec;
-    time_t lastverbsec;
-
-    char *maybe_output_listing (char *dstname, Header *hdr);
-};
-
 // when file is written to, compare with actual contents already on disk
 // files should never be read, so return error status if attempt to read
 struct CompFSAccess : IFSAccess {
@@ -492,40 +484,37 @@ struct CompFSAccess : IFSAccess {
 
 static int cmd_compare (int argc, char **argv)
 {
-    char const *dstprefix, *srcprefix;
     char *p, *ssname;
     CompFSAccess compFSAccess = CompFSAccess ();
-    FTBComparer ftbcomparer = FTBComparer ();
+    FTBReadMapper ftbreadmapper = FTBReadMapper ();
     int i;
 
-    dstprefix = NULL;
-    srcprefix = NULL;
-    ssname    = NULL;
+    ssname = NULL;
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
             if (strcasecmp (argv[i], "-decrypt") == 0) {
-                i = ftbcomparer.decodecipherargs (argc, argv, i, false);
+                i = ftbreadmapper.decodecipherargs (argc, argv, i, false);
                 if (i < 0) goto usage;
                 continue;
             }
             if (strcasecmp (argv[i], "-incremental") == 0) {
-                ftbcomparer.opt_incrmntl  = true;
-                ftbcomparer.opt_overwrite = true;
+                ftbreadmapper.opt_incrmntl  = true;
+                ftbreadmapper.opt_overwrite = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-simrderrs") == 0) {
                 if (++ i >= argc) goto usage;
-                ftbcomparer.opt_simrderrs = atoi (argv[i]);
+                ftbreadmapper.opt_simrderrs = atoi (argv[i]);
                 continue;
             }
             if (strcasecmp (argv[i], "-verbose") == 0) {
-                ftbcomparer.opt_verbose = true;
+                ftbreadmapper.opt_verbose = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-verbsec") == 0) {
                 if (++ i >= argc) goto usage;
-                ftbcomparer.opt_verbsec = strtol (argv[i], &p, 0);
-                if ((*p != 0) || (ftbcomparer.opt_verbsec <= 0)) {
+                ftbreadmapper.opt_verbsec = strtol (argv[i], &p, 0);
+                if ((*p != 0) || (ftbreadmapper.opt_verbsec <= 0)) {
                     fprintf (stderr, "ftbackup: verbsec %s must be integer greater than zero\n", argv[i]);
                     goto usage;
                 }
@@ -538,23 +527,23 @@ static int cmd_compare (int argc, char **argv)
             ssname = argv[i];
             continue;
         }
-        if (srcprefix == NULL) {
-            srcprefix = argv[i];
+        if (ftbreadmapper.srcprefix == NULL) {
+            ftbreadmapper.srcprefix = argv[i];
             continue;
         }
-        if (dstprefix == NULL) {
-            dstprefix = argv[i];
+        if (ftbreadmapper.dstprefix == NULL) {
+            ftbreadmapper.dstprefix = argv[i];
             continue;
         }
         fprintf (stderr, "ftbackup: unknown argument %s\n", argv[i]);
         goto usage;
     }
-    if (dstprefix == NULL) {
+    if (ftbreadmapper.dstprefix == NULL) {
         fprintf (stderr, "ftbackup: missing required arguments\n");
         goto usage;
     }
-    ftbcomparer.tfs = &compFSAccess;
-    return ftbcomparer.read_saveset (ssname, srcprefix, dstprefix);
+    ftbreadmapper.tfs = &compFSAccess;
+    return ftbreadmapper.read_saveset (ssname);
 
 usage:
     fprintf (stderr, "usage: ftbackup compare [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix> <dstprefix>\n");
@@ -563,15 +552,6 @@ usage:
     fprintf (stderr, "                      use '' to compare all files\n");
     fprintf (stderr, "        <dstprefix> = what to replace <srcprefix> part of filename with to construct output filename\n");
     return EX_CMD;
-}
-
-char *FTBComparer::maybe_output_listing (char *dstname, Header *hdr)
-{
-    if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
-        lastverbsec = time (NULL);
-        print_header (stderr, hdr, hdr->name);
-    }
-    return dstname;
 }
 
 CompFSAccess::CompFSAccess () { }
@@ -1832,7 +1812,7 @@ static int cmd_license (int argc, char **argv)
  * @brief List contents of a saveset.
  */
 struct FTBLister : FTBReader {
-    char *maybe_output_listing (char *dstname, Header *hdr);
+    virtual char const *select_file (Header const *hdr);
 };
 
 static int cmd_list (int argc, char **argv)
@@ -1868,7 +1848,7 @@ static int cmd_list (int argc, char **argv)
         goto usage;
     }
     ftblister.tfs = &nullFSAccess;
-    return ftblister.read_saveset (ssname, "", "$$ make sure nothing gets written to disk $$");
+    return ftblister.read_saveset (ssname);
 
 usage:
     fprintf (stderr, "usage: ftbackup list [-decrypt ... ] [-simrderrs <mod>] <saveset>\n");
@@ -1876,62 +1856,51 @@ usage:
     return EX_CMD;
 }
 
-char *FTBLister::maybe_output_listing (char *dstname, Header *hdr)
+char const *FTBLister::select_file (Header const *hdr)
 {
     print_header (stdout, hdr, hdr->name);
-    return NULL;
+    return FTBREADER_SELECT_SKIP;
 }
 
 /**
  * @brief Restore from a saveset.
  */
-struct FTBRestorer : FTBReader {
-    bool opt_verbose;
-    int opt_verbsec;
-    time_t lastverbsec;
-
-    char *maybe_output_listing (char *dstname, Header *hdr);
-};
-
 static int cmd_restore (int argc, char **argv)
 {
-    char const *dstprefix, *srcprefix;
     char *p, *ssname;
-    FTBRestorer ftbrestorer = FTBRestorer ();
+    FTBReadMapper ftbreadmapper = FTBReadMapper ();
     int i;
 
-    dstprefix = NULL;
-    srcprefix = NULL;
-    ssname    = NULL;
+    ssname = NULL;
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
             if (strcasecmp (argv[i], "-decrypt") == 0) {
-                i = ftbrestorer.decodecipherargs (argc, argv, i, false);
+                i = ftbreadmapper.decodecipherargs (argc, argv, i, false);
                 if (i < 0) goto usage;
                 continue;
             }
             if (strcasecmp (argv[i], "-incremental") == 0) {
-                ftbrestorer.opt_incrmntl  = true;
-                ftbrestorer.opt_overwrite = true;
+                ftbreadmapper.opt_incrmntl  = true;
+                ftbreadmapper.opt_overwrite = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-overwrite") == 0) {
-                ftbrestorer.opt_overwrite = true;
+                ftbreadmapper.opt_overwrite = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-simrderrs") == 0) {
                 if (++ i >= argc) goto usage;
-                ftbrestorer.opt_simrderrs = atoi (argv[i]);
+                ftbreadmapper.opt_simrderrs = atoi (argv[i]);
                 continue;
             }
             if (strcasecmp (argv[i], "-verbose") == 0) {
-                ftbrestorer.opt_verbose = true;
+                ftbreadmapper.opt_verbose = true;
                 continue;
             }
             if (strcasecmp (argv[i], "-verbsec") == 0) {
                 if (++ i >= argc) goto usage;
-                ftbrestorer.opt_verbsec = strtol (argv[i], &p, 0);
-                if ((*p != 0) || (ftbrestorer.opt_verbsec <= 0)) {
+                ftbreadmapper.opt_verbsec = strtol (argv[i], &p, 0);
+                if ((*p != 0) || (ftbreadmapper.opt_verbsec <= 0)) {
                     fprintf (stderr, "ftbackup: verbsec %s must be integer greater than zero\n", argv[i]);
                     goto usage;
                 }
@@ -1944,23 +1913,23 @@ static int cmd_restore (int argc, char **argv)
             ssname = argv[i];
             continue;
         }
-        if (srcprefix == NULL) {
-            srcprefix = argv[i];
+        if (ftbreadmapper.srcprefix == NULL) {
+            ftbreadmapper.srcprefix = argv[i];
             continue;
         }
-        if (dstprefix == NULL) {
-            dstprefix = argv[i];
+        if (ftbreadmapper.dstprefix == NULL) {
+            ftbreadmapper.dstprefix = argv[i];
             continue;
         }
         fprintf (stderr, "ftbackup: unknown argument %s\n", argv[i]);
         goto usage;
     }
-    if (dstprefix == NULL) {
+    if (ftbreadmapper.dstprefix == NULL) {
         fprintf (stderr, "ftbackup: missing required arguments\n");
         goto usage;
     }
-    ftbrestorer.tfs = &fullFSAccess;
-    return ftbrestorer.read_saveset (ssname, srcprefix, dstprefix);
+    ftbreadmapper.tfs = &fullFSAccess;
+    return ftbreadmapper.read_saveset (ssname);
 
 usage:
     fprintf (stderr, "usage: ftbackup restore [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix> <dstprefix>\n");
@@ -1969,15 +1938,6 @@ usage:
     fprintf (stderr, "                      use '' to restore all files\n");
     fprintf (stderr, "        <dstprefix> = what to replace <srcprefix> part of filename with to construct output filename\n");
     return EX_CMD;
-}
-
-char *FTBRestorer::maybe_output_listing (char *dstname, Header *hdr)
-{
-    if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
-        lastverbsec = time (NULL);
-        print_header (stderr, hdr, dstname);
-    }
-    return dstname;
 }
 
 /**
@@ -1993,7 +1953,7 @@ static int cmd_version (int argc, char **argv)
  * @brief Verify the XOR blocks of a saveset.
  */
 struct FTBXorVfy : FTBReader {
-    char *maybe_output_listing (char *dstname, Header *hdr) { return dstname; }
+    char const *select_file (Header const *hdr) { return FTBREADER_SELECT_SKIP; }
 };
 
 static int cmd_xorvfy (int argc, char **argv)
@@ -2143,7 +2103,6 @@ usage:
     usagecipherargs ("decrypt");
     return EX_CMD;
 }
-
 
 FTBackup::FTBackup ()
 {
@@ -2166,7 +2125,7 @@ FTBackup::~FTBackup ()
 /**
  * @brief Print a backup header giving the details of a file in the saveset.
  */
-void FTBackup::print_header (FILE *out, Header *hdr, char const *name)
+void FTBackup::print_header (FILE *out, Header const *hdr, char const *name)
 {
     char ftype, prots[10];
     struct tm lcl;

@@ -38,8 +38,6 @@ struct LostSSBlock {
 
 static uint32_t extpackeduint32 (char const **ptr);
 static uint32_t findnextsegno (char const *basename, uint32_t lastsegno);
-static void slashtonull (char *buf, int len);
-static void nulltoslash (char *buf, int len);
 static void updatetimes (IFSAccess *ifsa, char const *name, uint64_t atimns, uint64_t mtimns);
 static bool rmdirentry  (IFSAccess *ifsa, char const *dirname, char const *entname);
 
@@ -120,33 +118,23 @@ FTBReader::~FTBReader ()
  * @brief Read through saveset, listing and/or restoring all files therein.
  * @returns exit code
  */
-int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char const *dstprefix)
+int FTBReader::read_saveset (char const *ssname)
 {
     Block *rblock;
     bool fileopen, needhdr, ok, printnextgoodfile, setimes, thisok;
-    char const *xattrsnameend, *xattrsnameptr, *xattrsvaluptr;
-    char *dstname, *dstnamebuf, *lastfilenamefinished, *p, *srcprefixnul;
+    char const *dstname, *xattrsnameend, *xattrsnameptr, *xattrsvaluptr;
+    char *lastfilenamefinished, *p;
     DirTime *dirTime, *dirTimes;
     Header *hdr;
     int cmp, ssnamelen;
-    uint32_t dstnameall, dstnamelen, dstprefixlen, hassegno, hdrall, lastfilenofinished;
-    uint32_t skipped, srcnamelen, srcprefixlen, xattrslistlen, xattrsvalulen;
+    uint32_t hassegno, hdrall, lastfilenofinished;
+    uint32_t skipped, xattrslistlen, xattrsvalulen;
 
     maybesetdefaulthasher ();
 
-    dstnameall = 0;
-    dstnamebuf = NULL;
-    hdr        = (Header *) malloc (sizeof *hdr);
-    hdrall     = sizeof *hdr;
-
+    hdr    = (Header *) malloc (sizeof *hdr);
+    hdrall = sizeof *hdr;
     if (hdr == NULL) NOMEM ();
-
-    dstprefixlen = strlen (dstprefix);
-    srcprefixlen = strlen (srcprefix);
-
-    srcprefixnul = (char *) alloca (srcprefixlen);
-    memcpy (srcprefixnul, srcprefix, srcprefixlen);
-    slashtonull (srcprefixnul, srcprefixlen);
 
     if (strcmp (ssname, "-") == 0) {
         ssfd = STDIN_FILENO;
@@ -276,43 +264,20 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                 read_raw (hdr->name, hdr->nameln, false);
 
                 /*
-                 * See if file is selected and create destination filename string.
+                 * See if file is selected and maybe output listing line.
                  */
-                srcnamelen = strlen (hdr->name) + 1;
-                dstname = NULL;
-                slashtonull (hdr->name, srcnamelen - 1);
-                cmp = memcmp (hdr->name, srcprefixnul, srcprefixlen);
-                nulltoslash (hdr->name, srcnamelen - 1);
-                if (cmp >  0) break;
-                if (cmp == 0) {
-                    dstnamelen = dstprefixlen + srcnamelen - srcprefixlen;
-                    if (dstnameall < dstnamelen) {
-                        dstnameall = dstnamelen;
-                        dstnamebuf = (char *) realloc (dstnamebuf, dstnameall);
-                        if (dstnamebuf == NULL) NOMEM ();
-                    }
-                    memcpy (dstnamebuf, dstprefix, dstprefixlen);
-                    memcpy (dstnamebuf + dstprefixlen, hdr->name + srcprefixlen, srcnamelen - srcprefixlen);
-                    dstname = dstnamebuf;
-                }
+                dstname = select_file (hdr);
+                if (dstname == FTBREADER_SELECT_DONE) break;
 
                 /*
                  * If we won't be restoring anything more to a previous directory,
                  * set its times.
                  */
-                while ((dstname != NULL) && ((dirTime = dirTimes) != NULL) &&
+                while ((dstname != FTBREADER_SELECT_SKIP) && ((dirTime = dirTimes) != NULL) &&
                         (memcmp (dstname, dirTime->name, dirTime->nameln) > 0)) {
                     dirTimes = dirTime->next;
                     updatetimes (tfs, dirTime->name, dirTime->atimns, dirTime->mtimns);
                     free (dirTime);
-                }
-
-                /*
-                 * If file is selected, maybe output listing line.
-                 * Then if in listing mode, don't write output file (just skip over the data).
-                 */
-                if (dstname != NULL) {
-                    dstname = maybe_output_listing (dstname, hdr);
                 }
 
                 /*
@@ -337,7 +302,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                 /*
                  * If restored successfully, try to set ownership, protection and times.
                  */
-                if (thisok && (dstname != NULL)) {
+                if (thisok && (dstname != FTBREADER_SELECT_SKIP)) {
                     tfs->fslchown (dstname, hdr->ownuid, hdr->owngid);
                     if (!S_ISLNK (hdr->stmode)) tfs->fschmod (dstname, hdr->stmode);
                     if (!S_ISDIR (hdr->stmode)) {
@@ -354,7 +319,7 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
                         dirTimes = dirTime;
                     }
                     if (hdr->flags & HFL_XATTRS) {
-                        xattrsnameptr = hdr->name + srcnamelen;
+                        xattrsnameptr = hdr->name + strlen (hdr->name) + 1;
                         xattrslistlen = extpackeduint32 (&xattrsnameptr);
                         xattrsvaluptr = xattrsnameend = xattrsnameptr + xattrslistlen;
                         while (xattrsnameptr < xattrsnameend) {
@@ -412,7 +377,6 @@ int FTBReader::read_saveset (char const *ssname, char const *srcprefix, char con
         /*
          * All done.
          */
-        if (dstnamebuf != NULL) free (dstnamebuf);
         if (hdr != NULL) free (hdr);
         free (lastfilenamefinished);
         close (ssfd);
@@ -447,6 +411,7 @@ static uint32_t extpackeduint32 (char const **ptr)
  * @brief Restore a regular file's contents from the saveset.
  * @param hdr = backup header
  * @param dstname = where to restore the regular file to
+ *                  FTBREADER_SELECT_SKIP to skip file
  * @returns true: success
  *         false: error writing file
  */
@@ -463,7 +428,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
      */
     if (hdr->flags & HFL_HDLINK) {
         read_raw (&oldfileno, sizeof oldfileno, false);
-        if (dstname != NULL) {
+        if (dstname != FTBREADER_SELECT_SKIP) {
             if ((oldfileno >= inodesused) || (inodesname[oldfileno] == NULL)) {
                 fprintf (stderr, "ftbackup: hardlink %s missing old file %u\n", hdr->name, oldfileno);
                 return false;
@@ -481,7 +446,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
      * Not an hardlink, create the file and put in list of hardlinkable files.
      * Use O_EXCL to be consistent with other things like link(),mkdir(),mknod(),symlink().
      */
-    if (dstname == NULL) {
+    if (dstname == FTBREADER_SELECT_SKIP) {
         fd = -1;
     } else {
         if (opt_overwrite) tfs->fsunlink (dstname);
@@ -558,13 +523,14 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
         fd = -1;
     }
 
-    return (dstname == NULL) || (fd >= 0);
+    return (dstname == FTBREADER_SELECT_SKIP) || (fd >= 0);
 }
 
 /**
  * @brief Restore a directory's contents from the saveset.
  * @param hdr = backup header
  * @param dstname = where to restore the directory to
+ *                  FTBREADER_SELECT_SKIP to skip file
  * @returns true: success
  *         false: error creating directory
  *         *setimes = false: do not set atime/mtime
@@ -583,7 +549,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
      * Create the directory if it doesn't already exist.
      */
     ok = true;
-    if (dstname != NULL) {
+    if (dstname != FTBREADER_SELECT_SKIP) {
         *setimes = tfs->fsmkdir (dstname, hdr->stmode) >= 0;
         if (!*setimes && (errno != EEXIST)) {
             fprintf (stderr, "ftbackup: mkdir(%s) error: %s\n", dstname, mystrerr (errno));
@@ -600,7 +566,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
      */
     names = NULL;
     nents = 0;
-    if (opt_incrmntl && (dstname != NULL)) {
+    if (opt_incrmntl && (dstname != FTBREADER_SELECT_SKIP)) {
         nents = tfs->fsscandir (dstname, &names, NULL, alphasort);
         if (nents < 0) {
             fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dstname, mystrerr (errno));
@@ -752,6 +718,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
  * @brief Restore a symlink from the saveset.
  * @param hdr = backup header
  * @param dstname = where to restore the symlink to
+ *                  FTBREADER_SELECT_SKIP to skip file
  * @returns true: success
  *         false: error creating symlink
  */
@@ -763,7 +730,7 @@ bool FTBReader::read_symlink (Header *hdr, char const *dstname)
     read_raw (link, hdr->size, false);
     link[hdr->size] = 0;
 
-    if (dstname != NULL) {
+    if (dstname != FTBREADER_SELECT_SKIP) {
         if (opt_overwrite) tfs->fsunlink (dstname);
         if (tfs->fssymlink (link, dstname) < 0) {
             fprintf (stderr, "ftbackup: symlink(%s) error: %s\n", dstname, mystrerr (errno));
@@ -777,6 +744,7 @@ bool FTBReader::read_symlink (Header *hdr, char const *dstname)
  * @brief Restore a special file's contents from the saveset.
  * @param hdr = backup header
  * @param dstname = where to restore the special file to
+ *                  FTBREADER_SELECT_SKIP to skip file
  * @returns true: success
  *         false: error creating node
  */
@@ -786,7 +754,7 @@ bool FTBReader::read_special (Header *hdr, char const *dstname)
 
     read_raw (&rdev, sizeof rdev, false);
 
-    if (dstname != NULL) {
+    if (dstname != FTBREADER_SELECT_SKIP) {
         if (opt_overwrite) tfs->fsunlink (dstname);
         if (tfs->fsmknod (dstname, hdr->stmode, rdev) < 0) {
             fprintf (stderr, "ftbackup: mknod(%s) error: %s\n", dstname, mystrerr (errno));
@@ -1753,24 +1721,6 @@ static uint32_t findnextsegno (char const *basename, uint32_t lastsegno)
 }
 
 /**
- * @brief Replace all the slashes in a string with nulls.
- */
-static void slashtonull (char *buf, int len)
-{
-    int i;
-    for (i = 0; i < len; i ++) if (buf[i] == '/') buf[i] = 0;
-}
-
-/**
- * @brief Replace all the nulls in a string with slashes.
- */
-static void nulltoslash (char *buf, int len)
-{
-    int i;
-    for (i = 0; i < len; i ++) if (buf[i] == 0) buf[i] = '/';
-}
-
-/**
  * @brief Try to set a file's last access and last modification times.
  */
 static void updatetimes (IFSAccess *ifsa, char const *name, uint64_t atimns, uint64_t mtimns)
@@ -1816,4 +1766,87 @@ static bool rmdirentry (IFSAccess *ifsa, char const *dirname, char const *entnam
     } while (ndel);
 
     return ifsa->fsrmdir (name) >= 0;
+}
+
+/**
+ * @brief Same as FTBReader except it maps the saveset filenames
+ *        to a possibly different output file.
+ */
+FTBReadMapper::FTBReadMapper ()
+{
+    opt_verbose = false;
+    dstprefix   = NULL;
+    srcprefix   = NULL;
+    opt_verbsec = 0;
+
+    dstnamebuf  = NULL;
+    dstnameall  = 0;
+    lastverbsec = 0;
+}
+
+FTBReadMapper::~FTBReadMapper ()
+{
+    free (dstnamebuf);
+}
+
+/**
+ * @brief See if file is selected and maybe output listing line.
+ * @param hdr = file just seen in saveset
+ * @returns FTBREADER_SELECT_SKIP: don't restore file but keep reading saveset
+ *          FTBREADER_SELECT_DONE: don't restore file and stop reading saveset
+ *          else: restore file to this filename
+ */
+char const *FTBReadMapper::select_file (Header const *hdr)
+{
+    int dstnamelen, dstprefixlen, i, srcnamelen, srcprefixlen;
+
+    srcprefixlen = strlen (srcprefix);
+    dstprefixlen = strlen (dstprefix);
+
+    /*
+     * See if name from saveset starts with string given in prefix.
+     */
+    srcnamelen = strlen (hdr->name) + 1;
+    for (i = 0; i < srcnamelen; i ++) {
+        char namchar = hdr->name[i];
+        char pfxchar = srcprefix[i];
+
+        // end of prefix string means we have a match
+        if (pfxchar == 0) break;
+
+        // end of name string means name .lt. prefix
+        // so skip this file but call us back with next file
+        if (namchar == 0) return FTBREADER_SELECT_SKIP;
+
+        // sort order of files in saveset is like '/' are nulls
+        if (namchar == '/') namchar = 0;
+        if (pfxchar == '/') pfxchar = 0;
+
+        // if name is .lt. prefix, just skip this file but go on to next file
+        // if name is .gt. prefix, skip this file and don't bother with any more
+        if (namchar < pfxchar) return FTBREADER_SELECT_SKIP;
+        if (namchar > pfxchar) return FTBREADER_SELECT_DONE;
+    }
+
+    /*
+     * Splice srcprefix off front of name and splice dstprefix in its place.
+     */
+    dstnamelen = dstprefixlen + srcnamelen - srcprefixlen;
+    if (dstnameall < dstnamelen) {
+        dstnameall = dstnamelen;
+        dstnamebuf = (char *) realloc (dstnamebuf, dstnameall);
+        if (dstnamebuf == NULL) NOMEM ();
+    }
+    memcpy (dstnamebuf, dstprefix, dstprefixlen);
+    memcpy (dstnamebuf + dstprefixlen, hdr->name + srcprefixlen, srcnamelen - srcprefixlen);
+
+    /*
+     * Maybe output listing line.
+     */
+    if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
+        lastverbsec = time (NULL);
+        print_header (stderr, hdr, dstnamebuf);
+    }
+
+    return dstnamebuf;
 }
