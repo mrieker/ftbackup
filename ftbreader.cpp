@@ -1842,8 +1842,14 @@ char const *FTBReadMapper::select_file (Header const *hdr)
         for (i = j = 0;; j ++) {
             wildchar = savewildcard[i++];
 
-            // wildcard char is end of scan and we have a possible match
-            if ((wildchar == '*') || (wildchar == '?')) break;
+            // wildcard char means match the whole thing using wildcardmatch()
+            if (wildcardchar (wildchar)) {
+                if (wildcardmatch (savewildcard, hdr->name)) break;
+
+                // didn't match this wildcard but a later file in saveset might match
+                rc = FTBREADER_SELECT_SKIP;
+                goto nextmap;
+            }
 
             // backspace in prefix means take next char literally (not a wildcard)
             if (wildchar == '\\') wildchar = savewildcard[i++];
@@ -1852,7 +1858,7 @@ char const *FTBReadMapper::select_file (Header const *hdr)
             namechar = hdr->name[j];
 
             // see if both strings match exactly
-            if ((wildchar == 0) && (namechar == 0)) goto matchfound;
+            if ((wildchar == 0) && (namechar == 0)) break;
 
             // if end of prefix but more name, name is .gt. prefix
             if (wildchar == 0) goto nextmap;
@@ -1878,15 +1884,8 @@ char const *FTBReadMapper::select_file (Header const *hdr)
         }
 
         /*
-         * Prefix portion matches, see if name matches whole wildcard spec.
-         */
-        rc = FTBREADER_SELECT_SKIP;
-        if (!wildcardmatch (savewildcard, hdr->name)) goto nextmap;
-
-        /*
          * Splice non-wildcard off front of name and splice outputmapping in its place.
          */
-    matchfound:
         savewildcardlen  = j;
         outputmapping    = readmap->outputmapping;
         outputmappinglen = strlen (outputmapping);
@@ -1912,7 +1911,6 @@ char const *FTBReadMapper::select_file (Header const *hdr)
          * Tell FTBReader where to restore file to.
          */
         return dstnamebuf;
-
 nextmap:;
     }
 

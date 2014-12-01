@@ -2468,9 +2468,14 @@ int wildcardlength (char const *wild)
     int i;
     for (i = 0;; i ++) {
         char wc = wild[i];
-        if ((wc == 0) || (wc == '*') || (wc == '?') || (wc == '\\')) break;
+        if ((wc == 0) || (wc == '\\') || wildcardchar (wc)) break;
     }
     return i;
+}
+
+bool wildcardchar (char c)
+{
+    return (c == '*') || (c == '?') || (c == '[');
 }
 
 /**
@@ -2482,14 +2487,18 @@ int wildcardlength (char const *wild)
  */
 bool wildcardmatch (char const *wild, char const *name)
 {
-    int i = 0;
-    int j = 0;
-    int wcend = strlen (wild);
-    int nmend = strlen (name);
+    bool match, notflag, supa;
+    char nc, wc, wc2;
+    int i, j, k, nmend, wcend;
+
+    i = 0;
+    j = 0;
+    wcend = strlen (wild);
+    nmend = strlen (name);
 
     // keep going as long as there are wildcard chars to match
     while (i < wcend) {
-        char wc = wild[i];
+        wc = wild[i];
 
         // '*' matches any number of (including zero) chars from name
         if (wc == '*') {
@@ -2497,14 +2506,16 @@ bool wildcardmatch (char const *wild, char const *name)
             // skip over all the '*'s in a row in wildcard
             // '**' matches chars including '/' from name (supa = true)
             // '*' matches chars excluding '/' from name (supa = false)
-            bool supa = false;
+            supa = false;
             while ((++ i < wcend) && (wild[i] == '*')) {
                 supa = true;
             }
 
-            // optimization: if no more '*'s in wildcard, then match the end of both strings.
-            if (strchr (wild + i, '*') == NULL) {
-                int k = nmend - (wcend - i);
+            // optimization: if no more '*'s or '['s in wildcard, then match the end of both strings.
+            if ((strchr (wild + i, '*') == NULL) &&
+                (strchr (wild + i, '[') == NULL) &&
+                (strchr (wild + i, '\\') == NULL)) {
+                k = nmend - (wcend - i);
                 if (j > k) return false;
                 if (!supa && (memchr (name + j, '/', k - j) != NULL)) return false;
                 return wildcardmatch (wild + i, name + k);
@@ -2523,15 +2534,49 @@ bool wildcardmatch (char const *wild, char const *name)
         // there's a wildcard char other than '*' to match
         // if nothing left in name, it's no match
         if (j >= nmend) return false;
+        nc = name[j];
+
+        // for [...], name char must match one of the ... chars
+        if (wc == '[') {
+            match = false;
+            notflag = false;
+            if (++ i >= wcend) break;
+            wc = wild[i];
+            if ((wc == '!') || (wc == '^')) {
+                notflag = true;
+                if (++ i >= wcend) break;
+                wc = wild[i];
+            }
+            do {
+                if (wc == '\\') {
+                    if (++ i >= wcend) break;
+                    wc = wild[i];
+                }
+                if ((i + 2 < wcend) && (wild[i+1] == '-')) {
+                    i += 2;
+                    wc2 = wild[i];
+                    if (wc2 == '\\') {
+                        if (++ i >= wcend) break;
+                        wc2 = wild[i];
+                    }
+                    match |= (nc >= wc) && (nc <= wc2);
+                } else {
+                    match |= (nc == wc);
+                }
+                if (++ i >= wcend) break;
+                wc = wild[i];
+            } while (wc != ']');
+            if (!match ^ notflag) return false;
+        }
 
         // fail match if chars don't match
-        if (wc != '?') {
+        else if (wc != '?') {
             if (wc == '\\') {
                 if (++ i >= wcend) break;
                 wc = wild[i];
             }
 
-            if (name[j] != wc) return false;
+            if (nc != wc) return false;
         }
 
         // those chars match, on to next chars

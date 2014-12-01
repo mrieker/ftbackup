@@ -161,6 +161,7 @@ struct IFSAccess {
 #define MYESIMRDER 632396224
 char const *mystrerr (int err);
 int wildcardlength (char const *wild);
+bool wildcardchar (char c);
 bool wildcardmatch (char const *wild, char const *name);
 
 #endif

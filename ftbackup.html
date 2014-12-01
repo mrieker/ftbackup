@@ -398,14 +398,41 @@
         <A NAME="wildcard"><HR></A>
         <H3>Wildcards</H3>
         <UL>
-            <LI>The given <I>wildcard</I> can contain <B><TT>*</TT></B> or
-                <B><TT>?</TT></B> wildcard characters.  A <B><TT>**</TT></B>
-                wildcard matches directory boundaries as well, eg,
-                <TT>'**.tmp'</TT> matches all files in the tree ending in
-                <TT>.tmp</TT>, whereas <TT>'*.tmp'</TT> only matches files in
-                the one directory file ending in <TT>.tmp</TT>.
+            <LI><B><TT>\</TT></B> - escapes for literal interpretation of
+                following character
+            <LI><B><TT>*</TT></B> - matches zero or more non-slash characters
+            <LI><B><TT>**</TT></B> - matches zero or more characters, including
+                slashes
+            <LI><B><TT>?</TT></B> - matches any single character
+            <LI><B><TT>[</TT></B><TT>...</TT><B><TT>]</TT></B> - matches a
+                single character of name to at least one of the enclosed
+                alternatives:
+                <UL>
+                    <LI>if first character of <TT>...</TT> is a <TT>!</TT> or a
+                        <TT>^</TT>, the sense of the whole match is negated,
+                        ie, the name character must match none of the remaining
+                        <TT>...</TT> characters
+                    <LI>first character of remaining <TT>...</TT> can be a
+                        <TT>]</TT> to match the <TT>]</TT> as a literal
+                        character
+                    <LI>a single character - matches that single character
+                    <LI>a single character, a hyphen, a single character -
+                        matches that range of characters
+                    <LI>
+                </UL>
             <LI>Use something like apostrophes (<TT>'</TT>) to protect the
                 wildcard from the shell attempting to expand it.
+        </UL>
+        Examples:
+        <UL>
+            <LI><TT>*.tmp</TT> - match anything in current directory that ends
+                in <TT>.tmp</TT>
+            <LI><TT>**.tmp</TT> - match anything in any directory or
+                sub-directory that end in <TT>.tmp</TT>
+            <LI><TT>**[0-9A-Fa-f]</TT> - match anything in any directory or
+                sub-directory that ends in an hexadecimal digit
+            <LI><TT>**[!~#]</TT> - match anything in any directory or
+                sub-directory that ends in neither <TT>~</TT> nor <TT>#</TT>
         </UL>
         <HR>
         <H3>Saveset read errors</H3>
