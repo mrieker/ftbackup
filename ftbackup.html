@@ -6,7 +6,7 @@
     Copyright (C) 2014, Mike Rieker, www.outerworldapps.com
 
     This program comes with ABSOLUTELY NO WARRANTY; for details,
-    see LICENSE section below.
+    see <A HREF="#license">LICENSE</A> section below.
         </PRE></P>
         <P>
             The <B>ftbackup</B> utility provides for restoring archived files
@@ -20,23 +20,26 @@
         <P>
             The <B>ftbackup</B> utility has several commands:
             <UL>
-                <LI><B>backup</B> : create an archive from an existing
-                    directory tree</LI>
-                <LI><B>compare</B> : compare an existing archive to an existing
-                    directory tree</LI>
-                <LI><B>diff</B> : compare two existing directory trees</LI>
-                <LI><B>help</B> : display this file in web browser</LI>
-                <LI><B>history</B> : look up files saved in database</LI>
-                <LI><B>license</B> : print out the license info</LI>
-                <LI><B>list</B> : list files saved in an archive</LI>
-                <LI><B>restore</B> : restore files saved in an archive to a
-                    directory tree</LI>
+                <LI><A HREF="#backup"><B>backup</B></A> : create an archive
+                    from an existing directory tree
+                <LI><A HREF="#compare"><B>compare</B></A> : compare an existing
+                    archive to an existing directory tree
+                <LI><A HREF="#diff"><B>diff</B></A> : compare two existing
+                    directory trees
+                <LI><B>help</B> : display this file in web browser
+                <LI><A HREF="#history"><B>history</B></A> : look up files saved
+                    in database
+                <LI><B>license</B> : print out the license info
+                <LI><A HREF="#list"><B>list</B></A> : list files saved in an
+                    archive
+                <LI><A HREF="#restore"><B>restore</B></A> : restore files saved
+                    in an archive to a directory tree
                 <LI><B>version</B> : print out the <B>ftbackup</B> version
-                <LI><B>xorvfy</B> : verify the sequences, hashes and XOR blocks
-                    of an archive</LI>
+                <LI><A HREF="#xorvfy"><B>xorvfy</B></A> : verify the sequences,
+                    hashes and XOR blocks of an archive
             </UL>
         </P>
-        <HR>
+        <A NAME="backup"><HR></A>
         <H3>ftbackup backup <I>options</I> <I>saveset</I> <I>rootpath</I></H3>
         <UL>
             <LI><B><I>options</I></B>
@@ -44,7 +47,7 @@
                     <LI><B>-blocksize <I>bs</I></B> : sequence, hash, encrypt
                         and write <I>bs</I> bytes at a time.  Must be a power
                         of two in range 4096 (4K) to 1073741824 (1G).  Default
-                        is 32768 (32K).</LI>
+                        is 32768 (32K).
                     <LI><B>-encrypt [:<I>cipher</I>] [:<I>hash</I>]
                         <I>key</I></B> : encrypt the saveset.
                         <UL>
@@ -54,32 +57,34 @@
                                 SAFER_K SAFER_SK SEED Serpent SHARK SKIPJACK
                                 Square TEA Twofish XTEA</TT>, (<TT>AES</TT> and
                                 <TT>Rijndael</TT> are synonymous), default
-                                <TT>AES</TT></LI>
+                                <TT>AES</TT>
                             <LI><B><I>hash</I></B> : <TT>RIPEMD160 RIPEMD320
                                 RIPEMD128 RIPEMD256 SHA1 SHA224 SHA256 SHA384
                                 SHA512 Tiger Whirlpool</TT>, default
-                                <TT>SHA1</TT></LI>
+                                <TT>SHA1</TT>
                             <LI><B><I>key</I></B> : one of these forms:
                                 <UL>
                                     <LI><B>- <I>(single hyphen)</I></B> :
-                                        prompt at stdin</LI>
+                                        prompt at stdin
                                     <LI><B>@<I>filename</I></B> : read from
-                                        first line of file</LI>
-                                    <LI><I>else</I> : the given literal
-                                        string</LI>
+                                        first line of file
+                                    <LI><I>else</I> : the given literal string
                                 </UL>
-                            </LI>
                         </UL>
                         If no <B>-encrypt</B> option is given, an <TT>MD5</TT>
                         hash will be written to each block as a data integrity
                         check.
-                    </LI>
                     <LI><B>-history [::<I>histss</I>] <I>histdb</I></B> : write
                         saved filenames to an SQLite3 database.
                         <UL>
                             <LI><B><I>histss</I></B> - name of saveset written
                                 to database (defaults to <I>saveset</I>
-                                parameter value).
+                                parameter value).  This parameter does not have
+                                to identify an actual file, it is only
+                                used by the <A
+                                HREF="#history"><B>history</B></A> command.
+                                Thus, it can be any string useful to identify
+                                the saveset.
                             <LI><B><I>histdb</I></B> - SQLite3 database file.
                                 This file is created if it does not already
                                 exist, otherwise, the new files and saveset are
@@ -88,21 +93,19 @@
                     <LI><B>-idirect</B> : use O_DIRECT when reading files to be
                         archived.  Usually does not result in performance
                         increase of the archiving itself, but avoids thrashing
-                        the cache with blocks that will be accessed only
-                        once.</LI>
-                    <LI><B>-noxor</B> : do not write any XOR redundancy
-                        blocks.</LI>
+                        the cache with blocks that will be accessed only once.
+                    <LI><B>-noxor</B> : do not write any XOR redundancy blocks.
                     <LI><B>-odirect</B> : use O_DIRECT when writing the saveset
                         so as to avoid thrashing the cache with blocks of the
                         saveset as they will be written only once and most
-                        likely not read for quite some time.</LI>
+                        likely not read for quite some time.
                     <LI><B>-osync</B> : use O_SYNC when writing the saveset so
                         as to see media write errors as the saveset is written.
-                        Implied by <B>-odirect</B>.</LI>
+                        Implied by <B>-odirect</B>.
                     <LI><B>-record <I>file</I></B> : write the time the backup
                         is started to the given file.  This file can then be
                         used by a <B>-since</B> option on a later <B>backup</B>
-                        command for doing incremental backups.</LI>
+                        command for doing incremental backups.
                     <LI><B>-segsize <I>segsz</I></B> : instead of writing the
                         whole archive to a single file, break it up into a
                         series of smaller files, each of size <I>segsz</I>
@@ -113,39 +116,37 @@
                             <LI>The given segment size must be a multiple of
                                 the span size.
                             <LI>spansize = blocksize * (xorsc + 1) * xorgc
-                        </UL></LI>
+                        </UL>
                     <LI><B>-since <I>file</I></B> : skip files with ctime
                         earlier than given in file.  Note that we use the date
                         written within the file, not the date of the file
-                        itself.  Default is to process all files.</LI>
+                        itself.  Default is to process all files.
                     <LI><B>-verbose</B> : print name of each file just before
-                        it is processed.</LI>
+                        it is processed.
                     <LI><B>-verbsec <I>secs</I></B> : print name of file just
-                        before it is processed, at <I>secs</I> intervals.</LI>
+                        before it is processed, at <I>secs</I> intervals.
                     <LI><B>-xor <I>xorsc</I>,<I>xorgc</I></B> : specify how
                         often to generate XOR redundancy blocks.  <I>xorsc</I>
                         says to write one XOR block per xorsc data blocks
                         (default is 31).  <I>xorgc</I> says to group xorgc XOR
                         blocks together for writing (default is 2).  Each is an
-                        integer in range 1 to 255.</LI>
+                        integer in range 1 to 255.
                 </UL>
-            </LI>
-            <LI><B><I>saveset</I></B> : name of archive to be written.</LI>
+            <LI><B><I>saveset</I></B> : name of archive to be written.
             <LI><B><I>rootpath</I></B> : root of tree to be archived.  The
                 entire contents of the tree will be archived except:
                 <UL>
                     <LI>subdirectory contents currently being used as a mount
                         point (the subdirectory is backed up as an empty
-                        directory)</LI>
+                        directory)
                     <LI>other contents of a directory containing a file named
                         <TT>~SKIPDIR.FTB</TT> (the directory is backed up as a
                         directory containing only the <TT>~SKIPDIR.FTB</TT>
-                        file)</LI>
+                        file)
                     <LI>file listed in <TT>~SKIPNAMES.FTB</TT> within a
-                        directory</LI>
+                        directory
                     <LI>files with ctime earlier than given by <B>-since</B>
                 </UL>
-            </LI>
         </UL>
         Examples:
         <UL>
@@ -171,35 +172,34 @@
                         of 1GB files (<TT>-segsize $((1024*1024*1024))</TT>)
                         named <TT>/sdd1/root.full.ftb/000001</TT>,
                         <TT>/sdd1/root.full.ftb/000002</TT>,
-                        <TT>/sdd1/root.full.ftb/000003</TT>, etc.</LI>
+                        <TT>/sdd1/root.full.ftb/000003</TT>, etc.
                     <LI>Files are read from the root filesystem using O_DIRECT
                         (<TT>-idirect</TT>) so as not to fill up the cache with
                         blocks from files that will probably not be read until
-                        the next full backup.</LI>
+                        the next full backup.
                     <LI>The saveset files are encrypted using <TT>IDEA</TT> and
                         <TT>SHA1</TT> with the key given in file
-                        <TT>backup.key</TT>.</LI>
+                        <TT>backup.key</TT>.
                     <LI>Each filename as it is backed up is written to
                         <TT>/var/log/root_disk.hist</TT> SQLite3 database
                     <LI>Record the date/time the backup was started in
                         <TT>/var/log/root_disk.reco</TT> so that an incremental
                         backup can be done later using <TT>-since
-                        /var/log/root_disk.reco</TT>.</LI>
+                        /var/log/root_disk.reco</TT>.
                     <LI>The saveset is written in 64KB byte blocks
                         (<TT>-blocksize 65536</TT>).  126 data blocks are
                         written followed by 2 XOR blocks (<TT>-xor
                         63,2</TT>).  Thus the span size is 64KB * 64 * 2 =
                         8MB, so there can't be more than one sequence of up to
                         two consecutive corrupted blocks in every 8MB of the
-                        saveset.</LI>
+                        saveset.
                     <LI>The saveset is written using O_DIRECT
                         (<TT>-odirect</TT>) so as not to fill up the cache with
                         blocks that will probably not be read until a restore
-                        is needed.</LI>
+                        is needed.
                     <LI>The name of the file about to be processed is printed
-                        every 30 seconds (<TT>-verbsec 30</TT>).</LI>
+                        every 30 seconds (<TT>-verbsec 30</TT>).
                 </UL>
-            </LI>
         </UL>
         ~SKIPNAMES.FTB contents:
         <UL>
@@ -208,51 +208,46 @@
                 directory tree.  Each line of <TT>~SKIPNAMES.FTB</TT> is a
                 name (possibly with a sub-directory relative to the directory
                 of the <TT>~SKIPNAMES.FTB</TT> file).  The given name and/or
-                sub-directory can contain <B><TT>*</TT></B> or
-                <B><TT>?</TT></B> wildcard characters.  A <B><TT>**</TT></B>
-                wildcard matches directory boundaries as well, eg,
-                <TT>**.tmp</TT> skips all files in the tree ending in
-                <TT>.tmp</TT>, whereas <TT>*.tmp</TT> only skips files in the
-                same directory as the <TT>~SKIPNAMES.FTB</TT> file ending in
-                <TT>.tmp</TT>.</LI>
+                sub-directory can contain <A HREF="#wildcard">wildcard</A> 
+                characters.
         </UL>
-        <HR>
-        <H3>ftbackup compare <I>options</I> <I>saveset</I> <I>srcprefix</I>
-            <I>dstprefix</I></H3>
+        <A NAME="compare"><HR></A>
+        <H3>ftbackup compare <I>options</I> <I>saveset</I> {<I>savewildcard</I>
+            -to <I>outputmapping</I>} ...</H3>
         <UL>
             <LI><B><I>options</I></B>
                 <UL>
                     <LI><B>-decrypt [:<I>cipher</I>] [:<I>hash</I>]
                         <I>key</I></B> : as given to <B>-encrypt</B> when
-                        saveset written.</LI>
+                        saveset written.
                     <LI><B>-incremental</B> : when comparing a directory to a
                         filesystem with existing contents in that directory,
                         existing files not present in the directory
-                        being restored will elicit a compare error.</LI>
+                        being restored will elicit a compare error.
                     <LI><B>-simrderrs <I>prob</I></B> : simulate read error
-                        with probability of 1 out of <I>prob</I> blocks.</LI>
+                        with probability of 1 out of <I>prob</I> blocks.
                     <LI><B>-verbose</B> : print name of each file just before
-                        it is processed.</LI>
+                        it is processed.
                     <LI><B>-verbsec <I>secs</I></B> : print name of file just
-                        before it is processed, at <I>secs</I> intervals.</LI>
+                        before it is processed, at <I>secs</I> intervals.
                 </UL>
-            </LI>
-            <LI><B><I>saveset</I></B> : name of archive to be compared.</LI>
-            <LI><B><I>srcprefix</I></B> : select files from the saveset who's
-                name at the time of backup begins with this string.  Use
-                <TT>''</TT> to select all files.</LI>
-            <LI><B><I>dstprefix</I></B> : string to replace <I>srcprefix</I> in
-                the filename within the saveset to determine file on disk to
-                compare the file from the saveset to.  Use same as
-                <I>srcprefix</I> to compare to identical file.</LI>
+            <LI><B><I>saveset</I></B> : name of archive to be compared.
+            <LI><B><I>savewildcard</I></B> : select files from the saveset
+                matching this <A HREF="#wildcard">wildcard</A>.  Use 
+                <TT>'**'</TT> to select all files.
+            <LI><B>-to</B> : required keyword
+            <LI><B><I>outputmapping</I></B> : where to compare files matching
+                <B><I>savewildcard</I></B> to.  <B><I>outputmapping</I></B> 
+                replaces the non-wildcard string on front of 
+                <B><I>savewildcard</I></B>.
         </UL>
-        <HR>
+        <A NAME="diff"><HR></A>
         <H3>ftbackup diff <I>path1</I> <I>path2</I></H3>
         <UL>
-            <LI><B><I>path1</I></B> : path of one directory to compare</LI>
-            <LI><B><I>path2</I></B> : path of other directory to compare to</LI>
+            <LI><B><I>path1</I></B> : path of one directory to compare
+            <LI><B><I>path2</I></B> : path of other directory to compare to
         </UL>
-        <HR>
+        <A NAME="history"><HR></A>
         <H3>ftbackup history <I>options</I> <I>histdb</I> [<I>wildcard</I>
             ...]</H3>
         <UL>
@@ -265,22 +260,11 @@
                         consider savesets created since the indicated UTC
                         date/time
                 </UL>
-            </LI>
             <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
-                -history option on <B>backup</B> command line</LI>
-            <LI><B><I>wildcard</I></B> - wildcard to search for, default is to
-                list all files in the database</LI>
-        </UL>
-        Wildcards:
-        <UL>
-            <LI>The given <I>wildcard</I> can contain <B><TT>*</TT></B> or
-                <B><TT>?</TT></B> wildcard characters.  A <B><TT>**</TT></B>
-                wildcard matches directory boundaries as well, eg,
-                <TT>'**.tmp'</TT> matches all files in the tree ending in
-                <TT>.tmp</TT>, whereas <TT>'*.tmp'</TT> only matches files in
-                the one directory file ending in <TT>.tmp</TT>.</LI>
-            <LI>Use something like apostrophes (<TT>'</TT>) to protect the
-                wildcard from the shell attempting to process it.</LI>
+                -history option on <A HREF="#backup"><B>backup</B></A> command
+                line
+            <LI><B><I>wildcard</I></B> - <A HREF="#wildcard">wildcard</A> to 
+                search for, default is to list all files in the database
         </UL>
         <H3>ftbackup history -delss <I>options</I> <I>histdb</I>
             <I>wildcard</I> ...</H3>
@@ -294,16 +278,17 @@
                         consider savesets created since the indicated UTC
                         date/time
                 </UL>
-            </LI>
             <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
-                -history option on <B>backup</B> command line</LI>
-            <LI><B><I>wildcard</I></B> - wildcard of savesets to delete</LI>
+                -history option on <A HREF="#backup"><B>backup</B></A> command
+                line
+            <LI><B><I>wildcard</I></B> - <A HREF="#wildcard">wildcard</A> of 
+                savesets to delete
         </UL>
         Note:
         <UL>
             <LI>The shell <B><TT>sqlite3</TT></B> command can be used to manage
                 the <B><I>histdb</I></B> database if needed beyond what is
-                given here.</LI>
+                given here.
         </UL>
         <H3>ftbackup history -listss <I>options</I> <I>histdb</I>
             [<I>wildcard</I> ...]</H3>
@@ -317,89 +302,110 @@
                         consider savesets created since the indicated UTC
                         date/time
                 </UL>
-            </LI>
             <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
-                -history option on <B>backup</B> command line</LI>
-            <LI><B><I>wildcard</I></B> - wildcard of savesets to list, default
-                is to list all savesets in the database</LI>
+                -history option on <A HREF="#backup"><B>backup</B></A> command
+                line
+            <LI><B><I>wildcard</I></B> - <A HREF="#wildcard">wildcard</A> of 
+                savesets to list, default is to list all savesets in the 
+                database
         </UL>
-        <HR>
+        <A NAME="list"><HR></A>
         <H3>ftbackup list <I>options</I> <I>saveset</I></H3>
         <UL>
             <LI><B><I>options</I></B>
                 <UL>
                     <LI><B>-decrypt [:<I>cipher</I>] [:<I>hash</I>]
                         <I>key</I></B> : as given to <B>-encrypt</B> when
-                        saveset written.</LI>
+                        saveset written.
                     <LI><B>-simrderrs <I>prob</I></B> : simulate read error
-                        with probability of 1 out of <I>prob</I> blocks.</LI>
+                        with probability of 1 out of <I>prob</I> blocks.
                 </UL>
-            </LI>
-            <LI><B><I>saveset</I></B> : name of archive to be listed.</LI>
+            <LI><B><I>saveset</I></B> : name of archive to be listed.
         </UL>
-        <HR>
-        <H3>ftbackup restore <I>options</I> <I>saveset</I> <I>srcprefix</I>
-            <I>dstprefix</I></H3>
+        <A NAME="restore"><HR></A>
+        <H3>ftbackup restore <I>options</I> <I>saveset</I> {<I>savewildcard</I>
+            -to <I>outputmapping</I>} ...</H3>
         <UL>
             <LI><B><I>options</I></B>
                 <UL>
                     <LI><B>-decrypt [:<I>cipher</I>] [:<I>hash</I>]
                         <I>key</I></B> : as given to <B>-encrypt</B> when
-                        saveset written.</LI>
+                        saveset written.
                     <LI><B>-incremental</B> : when restoring a directory to an
                         existing filesystem with existing contents in that
                         directory, existing files not present in the directory
-                        being restored will be deleted.</LI>
+                        being restored will be deleted.
                     <LI><B>-overwrite</B> : overwrite an existing file with the
                         file from the saveset.  Otherwise, an error message is
-                        printed and the existing file remains as is.</LI>
+                        printed and the existing file remains as is.
                     <LI><B>-simrderrs <I>prob</I></B> : simulate read error
-                        with probability of 1 out of <I>prob</I> blocks.</LI>
+                        with probability of 1 out of <I>prob</I> blocks.
                     <LI><B>-verbose</B> : print name of each file just before
-                        it is processed.</LI>
+                        it is processed.
                     <LI><B>-verbsec <I>secs</I></B> : print name of file just
-                        before it is processed, at <I>secs</I> intervals.</LI>
+                        before it is processed, at <I>secs</I> intervals.
                 </UL>
-            </LI>
-            <LI><B><I>saveset</I></B> : name of archive to be compared.</LI>
-            <LI><B><I>srcprefix</I></B> : select files from the saveset who's
-                name at the time of backup begins with this string.  Use
-                <TT>''</TT> to select all files.</LI>
-            <LI><B><I>dstprefix</I></B> : string to replace <I>srcprefix</I> in
-                the filename within the saveset to determine file on disk to
-                restore the file from the saveset to.  Use same as
-                <I>srcprefix</I> to restore to identical file.</LI>
+            <LI><B><I>saveset</I></B> : name of archive to be restored.
+            <LI><B><I>savewildcard</I></B> : select files from the saveset
+                matching this <A HREF="#wildcard">wildcard</A>.  Use 
+                <TT>'**'</TT> to select all files.
+            <LI><B>-to</B> : required keyword
+            <LI><B><I>outputmapping</I></B> : where to restore files matching
+                <B><I>savewildcard</I></B> to.  <B><I>outputmapping</I></B> 
+                replaces the non-wildcard string on front of 
+                <B><I>savewildcard</I></B>.
         </UL>
-        Example:
+        Examples:
         <UL>
+            <LI><TT>ftbackup restore save.ftb '**' -to ''</TT>
+                <UL>
+                    <LI>Restore all files from <TT>save.ftb</TT> to where they
+                        came from.
+                </UL>
             <LI><TT>ftbackup restore -decrypt :idea @backup.key -verbose
-                root.full.ftb/ /etc/ /restored_etc/</TT>
+                root.full.ftb/ '/etc/**' -to /restored_etc/ '/var/**.log' -to
+                /restored_var_log/</TT>
                 <UL>
                     <LI>Restore from the encrypted <TT>root.full.ftb/</TT>
                         saveset (presumably segmented files in that
                         directory named <TT>root.full.ftb/000001</TT>,
-                        <TT>root.full.ftb/000002</TT>, etc).</LI>
+                        <TT>root.full.ftb/000002</TT>, etc).
                     <LI>Print the name of each file just before restoring it
-                        (<TT>-verbose</TT>).</LI>
-                    <LI>Restore only files named beginning with, when saved,
+                        (<TT>-verbose</TT>).
+                    <LI>Restore files named beginning with, when saved,
                         <TT>/etc/</TT>.  Splice out the <TT>/etc/</TT> and
                         replace it with <TT>/restored_etc/</TT>, eg,
                         <TT>/etc/hosts</TT> gets restored to
-                        <TT>/restored_etc/hosts</TT>.</LI>
+                        <TT>/restored_etc/hosts</TT>.
+                    <LI>Restore files named beginning with, when saved,
+                        <TT>/var/</TT> and ending with <TT>.log</TT>.  Replace
+                        the <TT>/var/</TT> with <TT>/restored_var_log/</TT>,
+                        eg, <TT>/var/log/openvpn.log</TT> gets restored to
+                        <TT>/restored_var_log/log/openvpn.log</TT>.
                 </UL>
-            </LI>
         </UL>
-        <HR>
+        <A NAME="xorvfy"><HR></A>
         <H3>ftbackup xorvfy <I>options</I> <I>saveset</I></H3>
         <UL>
             <LI><B><I>options</I></B>
                 <UL>
                     <LI><B>-decrypt [:<I>cipher</I>] [:<I>hash</I>]
                         <I>key</I></B> : as given to <B>-encrypt</B> when
-                        saveset written.</LI>
+                        saveset written.
                 </UL>
-            </LI>
-            <LI><B><I>saveset</I></B> : name of archive to be verified.</LI>
+            <LI><B><I>saveset</I></B> : name of archive to be verified.
+        </UL>
+        <A NAME="wildcard"><HR></A>
+        <H3>Wildcards</H3>
+        <UL>
+            <LI>The given <I>wildcard</I> can contain <B><TT>*</TT></B> or
+                <B><TT>?</TT></B> wildcard characters.  A <B><TT>**</TT></B>
+                wildcard matches directory boundaries as well, eg,
+                <TT>'**.tmp'</TT> matches all files in the tree ending in
+                <TT>.tmp</TT>, whereas <TT>'*.tmp'</TT> only matches files in
+                the one directory file ending in <TT>.tmp</TT>.
+            <LI>Use something like apostrophes (<TT>'</TT>) to protect the
+                wildcard from the shell attempting to expand it.
         </UL>
         <HR>
         <H3>Saveset read errors</H3>
@@ -441,8 +447,8 @@
         <H3>Saveset format</H3>
         <P>
             Savesets consists of a series of fixed-length blocks whose size was
-            given on the <B>backup</B> command line.  The final block is padded
-            with 0xFF bytes as necessary to fill it.
+            given on the <A HREF="#backup"><B>backup</B></A> command line.  The
+            final block is padded with 0xFF bytes as necessary to fill it.
         </P>
         <P>
             There are data blocks and XOR blocks.  The data blocks are numbered
@@ -511,7 +517,7 @@
             block to the next.  File headers are never compressed, and only the
             contents of regular files and directories are compressed.
         </P>
-        <HR>
+        <A NAME="license"><HR></A>
         <H3>LICENSE</H3><PRE>
 
     This program is free software: you can redistribute it and/or modify

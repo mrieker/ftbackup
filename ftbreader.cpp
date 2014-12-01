@@ -1775,18 +1775,40 @@ static bool rmdirentry (IFSAccess *ifsa, char const *dirname, char const *entnam
 FTBReadMapper::FTBReadMapper ()
 {
     opt_verbose = false;
-    dstprefix   = NULL;
-    srcprefix   = NULL;
     opt_verbsec = 0;
 
     dstnamebuf  = NULL;
+    mappings    = NULL;
     dstnameall  = 0;
     lastverbsec = 0;
 }
 
 FTBReadMapper::~FTBReadMapper ()
 {
+    FTBReadMap *readmap;
+
     free (dstnamebuf);
+    while ((readmap = mappings) != NULL) {
+        mappings = readmap->next;
+        free (readmap);
+    }
+}
+
+/**
+ * @brief Add saveset filename to output filename mapping spec.
+ * @param savewildcard = wildcard to match filenames from saveset
+ * @param outputmapping = string to splice in place of non-wildcard part on front of savewildcard
+ */
+void FTBReadMapper::add_mapping (char const *savewildcard, char const *outputmapping)
+{
+    FTBReadMap *map;
+
+    map = (FTBReadMap *) malloc (sizeof *map);
+    if (map == NULL) NOMEM ();
+    map->next = mappings;
+    map->savewildcard  = savewildcard;
+    map->outputmapping = outputmapping;
+    mappings = map;
 }
 
 /**
@@ -1798,55 +1820,106 @@ FTBReadMapper::~FTBReadMapper ()
  */
 char const *FTBReadMapper::select_file (Header const *hdr)
 {
-    int dstnamelen, dstprefixlen, i, srcnamelen, srcprefixlen;
+    char const *outputmapping, *rc, *savewildcard;
+    char namechar, wildchar;
+    FTBReadMap *readmap;
+    int dstnamelen, i, j, outputmappinglen, srcnamelen, savewildcardlen;
 
-    srcprefixlen = strlen (srcprefix);
-    dstprefixlen = strlen (dstprefix);
+    rc = FTBREADER_SELECT_DONE;
 
-    /*
-     * See if name from saveset starts with string given in prefix.
-     */
-    srcnamelen = strlen (hdr->name) + 1;
-    for (i = 0; i < srcnamelen; i ++) {
-        char namchar = hdr->name[i];
-        char pfxchar = srcprefix[i];
+    for (readmap = mappings; readmap != NULL; readmap = readmap->next) {
 
-        // end of prefix string means we have a match
-        if (pfxchar == 0) break;
+        /*
+         * Get a wildcard the hdr->name has to match.
+         */
+        savewildcard = readmap->savewildcard;
 
-        // end of name string means name .lt. prefix
-        // so skip this file but call us back with next file
-        if (namchar == 0) return FTBREADER_SELECT_SKIP;
+        /*
+         * See if name from saveset starts with non-wildcard string at beginning of wildcard.
+         * If the name is .lt. wildcard, it is possible to have future matches, so return SKIP.
+         * If the name is .gt. wildcard, it isn't possible to have future matches, so return DONE.
+         */
+        for (i = j = 0;; j ++) {
+            wildchar = savewildcard[i++];
 
-        // sort order of files in saveset is like '/' are nulls
-        if (namchar == '/') namchar = 0;
-        if (pfxchar == '/') pfxchar = 0;
+            // wildcard char is end of scan and we have a possible match
+            if ((wildchar == '*') || (wildchar == '?')) break;
 
-        // if name is .lt. prefix, just skip this file but go on to next file
-        // if name is .gt. prefix, skip this file and don't bother with any more
-        if (namchar < pfxchar) return FTBREADER_SELECT_SKIP;
-        if (namchar > pfxchar) return FTBREADER_SELECT_DONE;
+            // backspace in prefix means take next char literally (not a wildcard)
+            if (wildchar == '\\') wildchar = savewildcard[i++];
+
+            // get char from name from saveset string
+            namechar = hdr->name[j];
+
+            // see if both strings match exactly
+            if ((wildchar == 0) && (namechar == 0)) goto matchfound;
+
+            // if end of prefix but more name, name is .gt. prefix
+            if (wildchar == 0) goto nextmap;
+
+            // if end of name but more prefix, name is .lt. prefix
+            if (namechar == 0) {
+                rc = FTBREADER_SELECT_SKIP;
+                goto nextmap;
+            }
+
+            // sort order of files in saveset is like '/' are nulls
+            if (namechar == '/') namechar = 0;
+            if (wildchar == '/') wildchar = 0;
+
+            // if name is .lt. prefix, just skip this file but go on to next file in saveset
+            if (namechar < wildchar) {
+                rc = FTBREADER_SELECT_SKIP;
+                goto nextmap;
+            }
+
+            // if name is .gt. prefix, skip this file and don't bother with any more
+            if (namechar > wildchar) goto nextmap;
+        }
+
+        /*
+         * Prefix portion matches, see if name matches whole wildcard spec.
+         */
+        rc = FTBREADER_SELECT_SKIP;
+        if (!wildcardmatch (savewildcard, hdr->name)) goto nextmap;
+
+        /*
+         * Splice non-wildcard off front of name and splice outputmapping in its place.
+         */
+    matchfound:
+        savewildcardlen  = j;
+        outputmapping    = readmap->outputmapping;
+        outputmappinglen = strlen (outputmapping);
+        srcnamelen       = strlen (hdr->name) + 1;
+        dstnamelen       = outputmappinglen + srcnamelen - savewildcardlen;
+        if (dstnameall < dstnamelen) {
+            dstnameall = dstnamelen;
+            dstnamebuf = (char *) realloc (dstnamebuf, dstnameall);
+            if (dstnamebuf == NULL) NOMEM ();
+        }
+        memcpy (dstnamebuf, outputmapping, outputmappinglen);
+        memcpy (dstnamebuf + outputmappinglen, hdr->name + savewildcardlen, srcnamelen - savewildcardlen);
+
+        /*
+         * Maybe output listing line.
+         */
+        if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
+            lastverbsec = time (NULL);
+            print_header (stderr, hdr, dstnamebuf);
+        }
+
+        /*
+         * Tell FTBReader where to restore file to.
+         */
+        return dstnamebuf;
+
+nextmap:;
     }
 
     /*
-     * Splice srcprefix off front of name and splice dstprefix in its place.
+     * File not selected, either go on to next file (SKIP) because another
+     * name might match, or finish up (DONE) because it isn't possible for
+     * another name to match.
      */
-    dstnamelen = dstprefixlen + srcnamelen - srcprefixlen;
-    if (dstnameall < dstnamelen) {
-        dstnameall = dstnamelen;
-        dstnamebuf = (char *) realloc (dstnamebuf, dstnameall);
-        if (dstnamebuf == NULL) NOMEM ();
-    }
-    memcpy (dstnamebuf, dstprefix, dstprefixlen);
-    memcpy (dstnamebuf + dstprefixlen, hdr->name + srcprefixlen, srcnamelen - srcprefixlen);
-
-    /*
-     * Maybe output listing line.
-     */
-    if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
-        lastverbsec = time (NULL);
-        print_header (stderr, hdr, dstnamebuf);
-    }
-
-    return dstnamebuf;
+    return rc;
 }

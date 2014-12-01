@@ -78,16 +78,22 @@ private:
 
 struct FTBReadMapper : FTBReader {
     bool opt_verbose;
-    char const *dstprefix;
-    char const *srcprefix;
     int opt_verbsec;
 
     FTBReadMapper ();
     ~FTBReadMapper ();
+    void add_mapping (char const *savwild, char const *outwild);
     virtual char const *select_file (Header const *hdr);
 
 private:
+    struct FTBReadMap {
+        FTBReadMap *next;
+        char const *savewildcard;
+        char const *outputmapping;
+    };
+
     char *dstnamebuf;
+    FTBReadMap *mappings;
     int dstnameall;
     time_t lastverbsec;
 };

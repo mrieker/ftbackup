@@ -42,8 +42,6 @@ static int cmd_backup (int argc, char **argv);
 static bool write_nanos_to_file (uint64_t nanos, char const *name);
 static uint64_t read_nanos_from_file (char const *name);
 
-static int cmd_compare (int argc, char **argv);
-
 static int cmd_diff (int argc, char **argv);
 static bool diff_file (char const *path1, char const *path2);
 static char *formatime (char *buff, time_t time);
@@ -64,7 +62,7 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
 static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards);
 static int cmd_license (int argc, char **argv);
 static int cmd_list (int argc, char **argv);
-static int cmd_restore (int argc, char **argv);
+static int cmd_restore (int argc, char **argv, IFSAccess *tfs);
 static int cmd_version (int argc, char **argv);
 static int cmd_xorvfy (int argc, char **argv);
 
@@ -77,6 +75,214 @@ static bool readpasswd (char const *prompt, char *pwbuff, size_t pwsize);
  * @brief A spot for IFSAccess typeinfo and vtable.
  */
 IFSAccess::~IFSAccess () { }
+
+/**
+ * @brief Compare saveset file to disk file:
+ *        - when file is written to, compare with actual contents already on disk
+ *        - files should never be read, so return error status if attempt to read
+ */
+struct CompFSAccess : IFSAccess {
+    CompFSAccess ();
+
+    virtual int fsopen (char const *name, int flags, mode_t mode=0);
+    virtual int fsclose (int fd) { return close (fd); }
+    virtual int fsftruncate (int fd, uint64_t len);
+    virtual int fsread (int fd, void *buf, int len) { errno = ENOSYS; return -1; }
+    virtual int fspread (int fd, void *buf, int len, uint64_t pos) { errno = ENOSYS; return -1; }
+    virtual int fswrite (int fd, void const *buf, int len);
+    virtual int fsfstat (int fd, struct stat *buf) { return fstat (fd, buf); }
+    virtual int fsstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
+    virtual int fslstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
+    virtual int fslutimes (char const *name, struct timespec *times);
+    virtual int fslchown (char const *name, uid_t uid, gid_t gid);
+    virtual int fschmod (char const *name, mode_t mode);
+    virtual int fsunlink (char const *name);
+    virtual int fsrmdir (char const *name);
+    virtual int fslink (char const *oldname, char const *newname);
+    virtual int fssymlink (char const *oldname, char const *newname);
+    virtual int fsreadlink (char const *name, char *buf, int len) { errno = ENOSYS; return -1; }
+    virtual int fsscandir (char const *dirname, struct dirent ***names, 
+            int (*filter)(const struct dirent *),
+            int (*compar)(const struct dirent **, const struct dirent **)) {
+        errno = ENOSYS; return -1;
+    }
+    virtual int fsmkdir (char const *dirname, mode_t mode);
+    virtual int fsmknod (char const *name, mode_t mode, dev_t rdev);
+    virtual DIR *fsopendir (char const *name) { errno = ENOSYS; return NULL; }
+    virtual struct dirent *fsreaddir (DIR *dir) { errno = ENOSYS; return NULL; }
+    virtual void fsclosedir (DIR *dir) { }
+    virtual int fsllistxattr (char const *path, char *list, int size) { errno = ENOSYS; return -1; }
+    virtual int fslgetxattr (char const *path, char const *name, void *value, int size) { errno = ENOSYS; return -1; }
+    virtual int fslsetxattr (char const *path, char const *name, void const *value, int size, int flags);
+};
+
+CompFSAccess::CompFSAccess () { }
+static CompFSAccess compFSAccess;
+
+// instead of creating the file, we open it for reading so when file is written, we can compare data.
+int CompFSAccess::fsopen (char const *name, int flags, mode_t mode)
+{
+    int fd = open (name, O_RDONLY | O_NOATIME, mode);
+    if (fd < 0) fd = open (name, O_RDONLY, mode);
+    return fd;
+}
+
+// instead of extending file to the given size, make sure it is exactly that size
+// ...as this call is used to pre-extend the file to the exact size as in saveset
+int CompFSAccess::fsftruncate (int fd, uint64_t len)
+{
+    struct stat statbuf;
+    int rc = fstat (fd, &statbuf);
+    if ((rc >= 0) && (len != (uint64_t) statbuf.st_size)) {
+        errno = MYEDATACMP;
+        rc = -1;
+    }
+    return rc;
+}
+
+// instead of writing the data to the file, compare it to the file's existing data
+int CompFSAccess::fswrite (int fd, void const *buf, int len)
+{
+    char cmp[len];
+    int rc = read (fd, cmp, len);
+    if ((rc >= 0) && (memcmp (buf, cmp, rc) != 0)) {
+        errno = MYEDATACMP;
+        rc = -1;
+    }
+    return rc;
+}
+
+// make sure the file's times are as given
+int CompFSAccess::fslutimes (char const *name, struct timespec *times)
+{
+    struct stat statbuf;
+    int rc = lstat (name, &statbuf);
+    if (rc >= 0) {
+        if ((times[0].tv_sec  != statbuf.st_atim.tv_sec)  ||
+            (times[0].tv_nsec != statbuf.st_atim.tv_nsec) ||
+            (times[1].tv_sec  != statbuf.st_mtim.tv_sec)  ||
+            (times[1].tv_nsec != statbuf.st_mtim.tv_nsec)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// make sure the file's ownership is as given
+int CompFSAccess::fslchown (char const *name, uid_t uid, gid_t gid)
+{
+    struct stat statbuf;
+    int rc = lstat (name, &statbuf);
+    if (rc >= 0) {
+        if ((uid != statbuf.st_uid) || (gid != statbuf.st_gid)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// make sure the file's protections and type are as given
+int CompFSAccess::fschmod (char const *name, mode_t mode)
+{
+    struct stat statbuf;
+    int rc = stat (name, &statbuf);
+    if (rc >= 0) {
+        if (mode != statbuf.st_mode) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// instead of deleting the file, make sure the file doesn't exist
+int CompFSAccess::fsunlink (char const *name)
+{
+    struct stat statbuf;
+    int rc = stat (name, &statbuf);
+    if (rc >= 0) {
+        errno = MYEDATACMP;
+        rc = -1;
+    }
+    if ((rc < 0) && (errno == ENOENT)) rc = 0;
+    return rc;
+}
+int CompFSAccess::fsrmdir (char const *name)
+{
+    return fsunlink (name);
+}
+
+// instead of hardlinking to an existing file, make sure the two files are already hardlinked
+int CompFSAccess::fslink (char const *oldname, char const *newname)
+{
+    struct stat oldstatbuf, newstatbuf;
+    int rc = lstat (oldname, &oldstatbuf) | lstat (newname, &newstatbuf);
+    if (rc >= 0) {
+        if ((oldstatbuf.st_dev != newstatbuf.st_dev) ||
+            (oldstatbuf.st_ino != newstatbuf.st_ino)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// instead of writing a symlink, make sure the existing symlink is as given
+int CompFSAccess::fssymlink (char const *oldname, char const *newname)
+{
+    int len = strlen (oldname);
+    char cmp[len+1];
+    int rc = readlink (newname, cmp, len + 1);
+    if (rc >= 0) {
+        if ((rc != len) || (memcmp (cmp, oldname, len) != 0)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// instead of creating a directory, make sure the given directory exists
+int CompFSAccess::fsmkdir (char const *dirname, mode_t mode)
+{
+    struct stat statbuf;
+    int rc = lstat (dirname, &statbuf);
+    if ((rc >= 0) && !S_ISDIR (statbuf.st_mode)) {
+        errno = MYEDATACMP;
+        rc = -1;
+    }
+    return rc;
+}
+
+// instead of making a device special file, make sure the one that exists is the same
+int CompFSAccess::fsmknod (char const *name, mode_t mode, dev_t rdev)
+{
+    struct stat statbuf;
+    int rc = lstat (name, &statbuf);
+    if (rc >= 0) {
+        if ((statbuf.st_mode != mode) || (statbuf.st_rdev != rdev)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+// instead of writing an extended attribute, make sure it exists and value is the same
+int CompFSAccess::fslsetxattr (char const *path, char const *name, void const *value, int size, int flags)
+{
+    char buf[size];
+    int rc = lgetxattr (path, name, buf, size);
+    if (rc >= 0) {
+        if ((rc != size) || (memcmp (buf, value, size) != 0)) {
+            errno = MYEDATACMP;
+            rc = -1;
+        }
+    }
+    return rc;
+}
 
 /**
  * @brief All accesses to the filesystem are passed through to corresponding system calls.
@@ -167,13 +373,13 @@ int main (int argc, char **argv)
 
     if (argc >= 2) {
         if (strcasecmp (argv[1], "backup")  == 0) return cmd_backup  (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "compare") == 0) return cmd_compare (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "compare") == 0) return cmd_restore (argc - 1, argv + 1, &compFSAccess);
         if (strcasecmp (argv[1], "diff")    == 0) return cmd_diff    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "help")    == 0) return cmd_help    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "history") == 0) return cmd_history (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "license") == 0) return cmd_license (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "list")    == 0) return cmd_list    (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1, &fullFSAccess);
         if (strcasecmp (argv[1], "version") == 0) return cmd_version (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "xorvfy")  == 0) return cmd_xorvfy  (argc - 1, argv + 1);
         fprintf (stderr, "ftbackup: unknown command %s\n", argv[1]);
@@ -440,285 +646,6 @@ static uint64_t read_nanos_from_file (char const *name)
     structtm.tm_mon  --;
     secs = timegm (&structtm);
     return secs * 1000000000ULL + nanos;
-}
-
-/**
- * @brief Compare saveset to filesystem.
- */
-// when file is written to, compare with actual contents already on disk
-// files should never be read, so return error status if attempt to read
-struct CompFSAccess : IFSAccess {
-    CompFSAccess ();
-
-    virtual int fsopen (char const *name, int flags, mode_t mode=0);
-    virtual int fsclose (int fd) { return close (fd); }
-    virtual int fsftruncate (int fd, uint64_t len);
-    virtual int fsread (int fd, void *buf, int len) { errno = ENOSYS; return -1; }
-    virtual int fspread (int fd, void *buf, int len, uint64_t pos) { errno = ENOSYS; return -1; }
-    virtual int fswrite (int fd, void const *buf, int len);
-    virtual int fsfstat (int fd, struct stat *buf) { return fstat (fd, buf); }
-    virtual int fsstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
-    virtual int fslstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
-    virtual int fslutimes (char const *name, struct timespec *times);
-    virtual int fslchown (char const *name, uid_t uid, gid_t gid);
-    virtual int fschmod (char const *name, mode_t mode);
-    virtual int fsunlink (char const *name);
-    virtual int fsrmdir (char const *name);
-    virtual int fslink (char const *oldname, char const *newname);
-    virtual int fssymlink (char const *oldname, char const *newname);
-    virtual int fsreadlink (char const *name, char *buf, int len) { errno = ENOSYS; return -1; }
-    virtual int fsscandir (char const *dirname, struct dirent ***names, 
-            int (*filter)(const struct dirent *),
-            int (*compar)(const struct dirent **, const struct dirent **)) {
-        errno = ENOSYS; return -1;
-    }
-    virtual int fsmkdir (char const *dirname, mode_t mode);
-    virtual int fsmknod (char const *name, mode_t mode, dev_t rdev);
-    virtual DIR *fsopendir (char const *name) { errno = ENOSYS; return NULL; }
-    virtual struct dirent *fsreaddir (DIR *dir) { errno = ENOSYS; return NULL; }
-    virtual void fsclosedir (DIR *dir) { }
-    virtual int fsllistxattr (char const *path, char *list, int size) { errno = ENOSYS; return -1; }
-    virtual int fslgetxattr (char const *path, char const *name, void *value, int size) { errno = ENOSYS; return -1; }
-    virtual int fslsetxattr (char const *path, char const *name, void const *value, int size, int flags);
-};
-
-static int cmd_compare (int argc, char **argv)
-{
-    char *p, *ssname;
-    CompFSAccess compFSAccess = CompFSAccess ();
-    FTBReadMapper ftbreadmapper = FTBReadMapper ();
-    int i;
-
-    ssname = NULL;
-    for (i = 0; ++ i < argc;) {
-        if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
-            if (strcasecmp (argv[i], "-decrypt") == 0) {
-                i = ftbreadmapper.decodecipherargs (argc, argv, i, false);
-                if (i < 0) goto usage;
-                continue;
-            }
-            if (strcasecmp (argv[i], "-incremental") == 0) {
-                ftbreadmapper.opt_incrmntl  = true;
-                ftbreadmapper.opt_overwrite = true;
-                continue;
-            }
-            if (strcasecmp (argv[i], "-simrderrs") == 0) {
-                if (++ i >= argc) goto usage;
-                ftbreadmapper.opt_simrderrs = atoi (argv[i]);
-                continue;
-            }
-            if (strcasecmp (argv[i], "-verbose") == 0) {
-                ftbreadmapper.opt_verbose = true;
-                continue;
-            }
-            if (strcasecmp (argv[i], "-verbsec") == 0) {
-                if (++ i >= argc) goto usage;
-                ftbreadmapper.opt_verbsec = strtol (argv[i], &p, 0);
-                if ((*p != 0) || (ftbreadmapper.opt_verbsec <= 0)) {
-                    fprintf (stderr, "ftbackup: verbsec %s must be integer greater than zero\n", argv[i]);
-                    goto usage;
-                }
-                continue;
-            }
-            fprintf (stderr, "ftbackup: unknown option %s\n", argv[i]);
-            goto usage;
-        }
-        if (ssname == NULL) {
-            ssname = argv[i];
-            continue;
-        }
-        if (ftbreadmapper.srcprefix == NULL) {
-            ftbreadmapper.srcprefix = argv[i];
-            continue;
-        }
-        if (ftbreadmapper.dstprefix == NULL) {
-            ftbreadmapper.dstprefix = argv[i];
-            continue;
-        }
-        fprintf (stderr, "ftbackup: unknown argument %s\n", argv[i]);
-        goto usage;
-    }
-    if (ftbreadmapper.dstprefix == NULL) {
-        fprintf (stderr, "ftbackup: missing required arguments\n");
-        goto usage;
-    }
-    ftbreadmapper.tfs = &compFSAccess;
-    return ftbreadmapper.read_saveset (ssname);
-
-usage:
-    fprintf (stderr, "usage: ftbackup compare [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix> <dstprefix>\n");
-    usagecipherargs ("decrypt");
-    fprintf (stderr, "        <srcprefix> = compare only files beginning with this prefix\n");
-    fprintf (stderr, "                      use '' to compare all files\n");
-    fprintf (stderr, "        <dstprefix> = what to replace <srcprefix> part of filename with to construct output filename\n");
-    return EX_CMD;
-}
-
-CompFSAccess::CompFSAccess () { }
-
-// instead of creating the file, we open it for reading so when file is written, we can compare data.
-int CompFSAccess::fsopen (char const *name, int flags, mode_t mode)
-{
-    int fd = open (name, O_RDONLY | O_NOATIME, mode);
-    if (fd < 0) fd = open (name, O_RDONLY, mode);
-    return fd;
-}
-
-// instead of extending file to the given size, make sure it is exactly that size
-// ...as this call is used to pre-extend the file to the exact size as in saveset
-int CompFSAccess::fsftruncate (int fd, uint64_t len)
-{
-    struct stat statbuf;
-    int rc = fstat (fd, &statbuf);
-    if ((rc >= 0) && (len != (uint64_t) statbuf.st_size)) {
-        errno = MYEDATACMP;
-        rc = -1;
-    }
-    return rc;
-}
-
-// instead of writing the data to the file, compare it to the file's existing data
-int CompFSAccess::fswrite (int fd, void const *buf, int len)
-{
-    char cmp[len];
-    int rc = read (fd, cmp, len);
-    if ((rc >= 0) && (memcmp (buf, cmp, rc) != 0)) {
-        errno = MYEDATACMP;
-        rc = -1;
-    }
-    return rc;
-}
-
-// make sure the file's times are as given
-int CompFSAccess::fslutimes (char const *name, struct timespec *times)
-{
-    struct stat statbuf;
-    int rc = lstat (name, &statbuf);
-    if (rc >= 0) {
-        if ((times[0].tv_sec  != statbuf.st_atim.tv_sec)  ||
-            (times[0].tv_nsec != statbuf.st_atim.tv_nsec) ||
-            (times[1].tv_sec  != statbuf.st_mtim.tv_sec)  ||
-            (times[1].tv_nsec != statbuf.st_mtim.tv_nsec)) {
-            errno = MYEDATACMP;
-            rc = -1;
-        }
-    }
-    return rc;
-}
-
-// make sure the file's ownership is as given
-int CompFSAccess::fslchown (char const *name, uid_t uid, gid_t gid)
-{
-    struct stat statbuf;
-    int rc = lstat (name, &statbuf);
-    if (rc >= 0) {
-        if ((uid != statbuf.st_uid) || (gid != statbuf.st_gid)) {
-            errno = MYEDATACMP;
-            rc = -1;
-        }
-    }
-    return rc;
-}
-
-// make sure the file's protections and type are as given
-int CompFSAccess::fschmod (char const *name, mode_t mode)
-{
-    struct stat statbuf;
-    int rc = stat (name, &statbuf);
-    if (rc >= 0) {
-        if (mode != statbuf.st_mode) {
-            errno = MYEDATACMP;
-            rc = -1;
-        }
-    }
-    return rc;
-}
-
-// instead of deleting the file, make sure the file doesn't exist
-int CompFSAccess::fsunlink (char const *name)
-{
-    struct stat statbuf;
-    int rc = stat (name, &statbuf);
-    if (rc >= 0) {
-        errno = MYEDATACMP;
-        rc = -1;
-    }
-    if ((rc < 0) && (errno == ENOENT)) rc = 0;
-    return rc;
-}
-int CompFSAccess::fsrmdir (char const *name)
-{
-    return fsunlink (name);
-}
-
-// instead of hardlinking to an existing file, make sure the two files are already hardlinked
-int CompFSAccess::fslink (char const *oldname, char const *newname)
-{
-    struct stat oldstatbuf, newstatbuf;
-    int rc = lstat (oldname, &oldstatbuf) | lstat (newname, &newstatbuf);
-    if (rc >= 0) {
-        if ((oldstatbuf.st_dev != newstatbuf.st_dev) ||
-            (oldstatbuf.st_ino != newstatbuf.st_ino)) {
-            errno = MYEDATACMP;
-            rc = -1;
-        }
-    }
-    return rc;
-}
-
-// instead of writing a symlink, make sure the existing symlink is as given
-int CompFSAccess::fssymlink (char const *oldname, char const *newname)
-{
-    int len = strlen (oldname);
-    char cmp[len+1];
-    int rc = readlink (newname, cmp, len + 1);
-    if (rc >= 0) {
-        if ((rc != len) || (memcmp (cmp, oldname, len) != 0)) {
-            errno = MYEDATACMP;
-            rc = -1;
-        }
-    }
-    return rc;
-}
-
-// instead of creating a directory, make sure the given directory exists
-int CompFSAccess::fsmkdir (char const *dirname, mode_t mode)
-{
-    struct stat statbuf;
-    int rc = lstat (dirname, &statbuf);
-    if ((rc >= 0) && !S_ISDIR (statbuf.st_mode)) {
-        errno = MYEDATACMP;
-        rc = -1;
-    }
-    return rc;
-}
-
-// instead of making a device special file, make sure the one that exists is the same
-int CompFSAccess::fsmknod (char const *name, mode_t mode, dev_t rdev)
-{
-    struct stat statbuf;
-    int rc = lstat (name, &statbuf);
-    if (rc >= 0) {
-        if ((statbuf.st_mode != mode) || (statbuf.st_rdev != rdev)) {
-            errno = MYEDATACMP;
-            rc = -1;
-        }
-    }
-    return rc;
-}
-
-// instead of writing an extended attribute, make sure it exists and value is the same
-int CompFSAccess::fslsetxattr (char const *path, char const *name, void const *value, int size, int flags)
-{
-    char buf[size];
-    int rc = lgetxattr (path, name, buf, size);
-    if (rc >= 0) {
-        if ((rc != size) || (memcmp (buf, value, size) != 0)) {
-            errno = MYEDATACMP;
-            rc = -1;
-        }
-    }
-    return rc;
 }
 
 /**
@@ -1865,12 +1792,14 @@ char const *FTBLister::select_file (Header const *hdr)
 /**
  * @brief Restore from a saveset.
  */
-static int cmd_restore (int argc, char **argv)
+static int cmd_restore (int argc, char **argv, IFSAccess *tfs)
 {
     char *p, *ssname;
+    char const *savewildcard;
     FTBReadMapper ftbreadmapper = FTBReadMapper ();
     int i;
 
+    savewildcard = NULL;
     ssname = NULL;
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
@@ -1913,30 +1842,30 @@ static int cmd_restore (int argc, char **argv)
             ssname = argv[i];
             continue;
         }
-        if (ftbreadmapper.srcprefix == NULL) {
-            ftbreadmapper.srcprefix = argv[i];
-            continue;
+        savewildcard = argv[i];
+        if ((++ i >= argc) || (strcasecmp (argv[i], "-to") != 0)) {
+            fprintf (stderr, "ftbackup: missing -to after savewildcard %s\n", savewildcard);
+            goto usage;
         }
-        if (ftbreadmapper.dstprefix == NULL) {
-            ftbreadmapper.dstprefix = argv[i];
-            continue;
+        if ((++ i >= argc) || (argv[i][0] == '-')) {
+            fprintf (stderr, "ftbackup: missing outputmapping after savewildcard %s -to\n", savewildcard);
+            goto usage;
         }
-        fprintf (stderr, "ftbackup: unknown argument %s\n", argv[i]);
-        goto usage;
+        ftbreadmapper.add_mapping (savewildcard, argv[i]);
     }
-    if (ftbreadmapper.dstprefix == NULL) {
+    if (savewildcard == NULL) {
         fprintf (stderr, "ftbackup: missing required arguments\n");
         goto usage;
     }
-    ftbreadmapper.tfs = &fullFSAccess;
+    ftbreadmapper.tfs = tfs;
     return ftbreadmapper.read_saveset (ssname);
 
 usage:
-    fprintf (stderr, "usage: ftbackup restore [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> <srcprefix> <dstprefix>\n");
+    fprintf (stderr, "usage: ftbackup %s [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> {<savewildcard> -to <outputmapping>} ...\n", argv[0]);
     usagecipherargs ("decrypt");
-    fprintf (stderr, "        <srcprefix> = restore only files beginning with this prefix\n");
-    fprintf (stderr, "                      use '' to restore all files\n");
-    fprintf (stderr, "        <dstprefix> = what to replace <srcprefix> part of filename with to construct output filename\n");
+    fprintf (stderr, "        <savewildcard> = select files from saveset that match this wildcard\n");
+    fprintf (stderr, "        <outputmapping> = map the matching filenames to this string\n");
+    fprintf (stderr, "        use '**' -to '' to %s all files to same name on disk\n", argv[0]);
     return EX_CMD;
 }
 
