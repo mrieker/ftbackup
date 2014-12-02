@@ -1843,6 +1843,9 @@ static int cmd_license (int argc, char **argv)
  * @brief List contents of a saveset.
  */
 struct FTBLister : FTBReader {
+    bool opt_atime;
+    bool opt_ctime;
+
     virtual char const *select_file (Header const *hdr);
 };
 
@@ -1852,9 +1855,21 @@ static int cmd_list (int argc, char **argv)
     FTBLister ftblister = FTBLister ();
     int i;
 
+    ftblister.opt_atime = false;
+    ftblister.opt_ctime = false;
     ssname = NULL;
     for (i = 0; ++ i < argc;) {
         if ((argv[i][0] == '-') && (argv[i][1] != 0)) {
+            if (strcasecmp (argv[i], "-atime") == 0) {
+                ftblister.opt_atime = true;
+                ftblister.opt_ctime = false;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-ctime") == 0) {
+                ftblister.opt_atime = false;
+                ftblister.opt_ctime = true;
+                continue;
+            }
             if (strcasecmp (argv[i], "-decrypt") == 0) {
                 i = ftblister.decodecipherargs (argc, argv, i, false);
                 if (i < 0) goto usage;
@@ -1882,14 +1897,20 @@ static int cmd_list (int argc, char **argv)
     return ftblister.read_saveset (ssname);
 
 usage:
-    fprintf (stderr, "usage: ftbackup list [-decrypt ... ] [-simrderrs <mod>] <saveset>\n");
+    fprintf (stderr, "usage: ftbackup list [-atime|-ctime] [-decrypt ... ] [-simrderrs <mod>] <saveset>\n");
     usagecipherargs ("decrypt");
     return EX_CMD;
 }
 
 char const *FTBLister::select_file (Header const *hdr)
 {
-    print_header (stdout, hdr, hdr->name);
+    Header alttimehdr;
+
+    alttimehdr = *hdr;
+    if (opt_atime) alttimehdr.mtimns = alttimehdr.atimns;
+    if (opt_ctime) alttimehdr.mtimns = alttimehdr.ctimns;
+    print_header (stdout, &alttimehdr, hdr->name);
+
     return FTBREADER_SELECT_SKIP;
 }
 
