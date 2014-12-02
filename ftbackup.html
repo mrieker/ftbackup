@@ -29,6 +29,8 @@
                 <LI><B>help</B> : display this file in web browser
                 <LI><A HREF="#history"><B>history</B></A> : look up files saved
                     in database
+                <LI><A HREF="#images"><B>images</B></A> : copy needed image
+                    files to a directory
                 <LI><B>license</B> : print out the license info
                 <LI><A HREF="#list"><B>list</B></A> : list files saved in an
                     archive
@@ -308,6 +310,15 @@
             <LI><B><I>wildcard</I></B> - <A HREF="#wildcard">wildcard</A> of 
                 savesets to list, default is to list all savesets in the 
                 database
+        </UL>
+        <A NAME="images"><HR></A>
+        <H3>ftbackup images [-self] <I>directory</I></H3>
+        <UL>
+            <LI><B>-self</B> : copy the <TT>ftbackup</TT> image itself as well
+                as <TT>.so</TT> files, default is to copy just the <TT>.so</TT>
+                files
+            <LI><B><I>directory</I></B> : directory to copy the image files,
+                <TT>ftbackup</TT> and referenced <TT>.so</TT> files
         </UL>
         <A NAME="list"><HR></A>
         <H3>ftbackup list <I>options</I> <I>saveset</I></H3>
