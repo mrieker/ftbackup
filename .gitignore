@@ -3,3 +3,5 @@
 cryptopp562
 ftbackup
 ftbackup-*
+sqlite-amalgamation-*
+sqlite3.o
