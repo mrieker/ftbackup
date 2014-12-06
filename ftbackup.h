@@ -45,6 +45,7 @@
 #define FILEIOSIZE (32768U)
 #define DEF_CIPHERNAME "AES"
 #define DEF_HASHERNAME "SHA1"
+#define SQL_TIMEOUT_MS 10000
 #define UNUSED(v) asm volatile ("" : : "g" (v))
 
 #define DEFXORSC 31 // write one XOR block per 31 data blocks

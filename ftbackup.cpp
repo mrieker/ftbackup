@@ -1414,6 +1414,11 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
         exit (EX_HIST);
     }
 
+    rc = sqlite3_busy_timeout (histdb, SQL_TIMEOUT_MS);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite_busy_timeout(%s, %d) error: %s\n", histdbname, SQL_TIMEOUT_MS, sqlite3_errmsg (histdb));
+    }
+
     /*
      * Pre-compile select statement that selects the files based on given wildcards.
      */
@@ -1570,6 +1575,11 @@ static int cmd_history_list (char const *sssince, char const *ssbefore, char con
         fprintf (stderr, "ftbackup: sqlite3_open(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
         sqlite3_close (histdb);
         exit (EX_HIST);
+    }
+
+    rc = sqlite3_busy_timeout (histdb, SQL_TIMEOUT_MS);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite_busy_timeout(%s, %d) error: %s\n", histdbname, SQL_TIMEOUT_MS, sqlite3_errmsg (histdb));
     }
 
     /*

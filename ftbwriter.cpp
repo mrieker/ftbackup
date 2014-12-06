@@ -1027,18 +1027,23 @@ void *FTBWriter::hist_thread ()
     sqlite3 *histdb;
     sqlite3_int64 fileid, ssid;
     sqlite3_stmt *fileins, *filesel, *inststmt, *savestmt;
-    uint64_t wht_runtime;
+    uint64_t flushist, now, wht_runtime;
 
     wht_runtime = - getruntime ();
 
     /*
      * Create and/or open database.
      */
-    rc = sqlite3_open (histdbname, &histdb);
+    rc = sqlite3_open_v2 (histdbname, &histdb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
     if (rc != SQLITE_OK) {
         fprintf (stderr, "ftbackup: sqlite3_open(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
         sqlite3_close (histdb);
         exit (EX_HIST);
+    }
+
+    rc = sqlite3_busy_timeout (histdb, SQL_TIMEOUT_MS);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "ftbackup: sqlite_busy_timeout(%s, %d) error: %s\n", histdbname, SQL_TIMEOUT_MS, sqlite3_errmsg (histdb));
     }
 
     /*
@@ -1160,15 +1165,16 @@ void *FTBWriter::hist_thread ()
     /*
      * Lock database for efficiency.
      */
-    rc = sqlite3_exec (histdb, "BEGIN TRANSACTION", NULL, NULL, NULL);
+    rc = sqlite3_exec (histdb, "BEGIN", NULL, NULL, NULL);
     if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_exec(%s, BEGIN TRANSACTION) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+        fprintf (stderr, "ftbackup: sqlite3_exec(%s, BEGIN) error: %s\n", histdbname, sqlite3_errmsg (histdb));
         exit (EX_HIST);
     }
 
     /*
      * Keep processing incoming names until we get and end marker.
      */
+    flushist = 0;
     while (true) {
 
         /*
@@ -1248,6 +1254,24 @@ void *FTBWriter::hist_thread ()
          * Entry all processed.
          */
         free (hs.fname);
+
+        /*
+         * Flush history from time to time so listing will work.
+         */
+        now = getruntime ();
+        if (flushist + (SQL_TIMEOUT_MS * 500000ULL) < now) {
+            rc = sqlite3_exec (histdb, "COMMIT", NULL, NULL, NULL);
+            if (rc != SQLITE_OK) {
+                fprintf (stderr, "ftbackup: sqlite3_exec(%s, COMMIT) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+                exit (EX_HIST);
+            }
+            rc = sqlite3_exec (histdb, "BEGIN", NULL, NULL, NULL);
+            if (rc != SQLITE_OK) {
+                fprintf (stderr, "ftbackup: sqlite3_exec(%s, BEGIN) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+                exit (EX_HIST);
+            }
+            flushist = now;
+        }
     }
 
     /*
