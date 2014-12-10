@@ -2281,14 +2281,15 @@ uint32_t FTBackup::hashsize ()
  * @brief XOR the source data into the destination.
  * @param dst = output pointer
  * @param src = input pointer
- * @param nby = number of bytes, assumed to be multiple of 8 ge 16
+ * @param nby = number of bytes, assumed to be multiple of 4 ge 16
  */
 void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
 {
+    uint32_t nqd;
     uint64_t tmp;
 
+    nqd = nby / 8;
     asm volatile (
-        "   shrl    $3,%3       \n"
         "   movq    (%1),%0     \n"
         "   decl    %3          \n"
         "   .p2align 3          \n"
@@ -2300,8 +2301,16 @@ void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
         "   movq    (%1),%0     \n"
         "   jne     1b          \n"
         "   xorq    %0,(%2)     \n"
-            : "=r" (tmp), "+r" (src), "+r" (dst), "+r" (nby)
+            : "=r" (tmp), "+r" (src), "+r" (dst), "+r" (nqd)
             : : "cc", "memory");
+
+    if (nby & 4) {
+        asm volatile (
+            "   movl    8(%1),%0    \n"
+            "   xorl    %0,8(%2)    \n"
+                : "=r" (nqd), "+r" (src), "+r" (dst)
+                : : "cc", "memory");
+    }
 }
 
 /**

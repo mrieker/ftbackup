@@ -1282,7 +1282,8 @@ noxoread:
              */
             else if (gotxors[i] == linkedBlock->block.xorbc) {
                 xorblockdata (&linkedBlock->block, xorblocks[i], bsnh);
-                memset (linkedBlock->block.magic, 0, 8);
+                memset (linkedBlock->block.magic, 0, sizeof linkedBlock->block.magic);
+                memset (linkedBlock->block.nonce, 0, sizeof linkedBlock->block.nonce);
                 linkedBlock->block.xorno = 0;
                 linkedBlock->block.xorbc = 0;
                 for (i = 0; i < bsnh; i ++) {
