@@ -56,6 +56,7 @@ static bool diff_symlink (char const *path1, char const *path2);
 static bool diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2);
 
 static int cmd_help (int argc, char **argv);
+static char *afgetln (FILE *file);
 static int cmd_history (int argc, char **argv);
 static bool sanitizedatestr (char *outstr, char const *instr);
 static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards, bool del);
@@ -1182,8 +1183,28 @@ static bool diff_special (char const *path1, char const *path2, struct stat *sta
  */
 static int cmd_help (int argc, char **argv)
 {
-    char buff[4096], name[1024], *p, *q;
+    char *buff, *html, *name, *p, *q;
     FILE *file;
+    int rc;
+    uint32_t len;
+
+    buff = NULL;
+
+    /*
+     * HTML file is same as exe file with .html on the end.
+     */
+    for (len = 128;; len += len / 2) {
+        html = (char *) alloca (len + 5);
+        rc = readlink ("/proc/self/exe", html, len);
+        if (rc < 0) {
+            fprintf (stderr, "readlink(/proc/self/exe) error: %s\n", mystrerr (errno));
+            return EX_CMD;
+        }
+        if ((uint32_t) rc < len) {
+            strcpy (html + rc, ".html");
+            break;
+        }
+    }
 
     // http://standards.freedesktop.org/desktop-entry-spec/desktop-entry-spec-1.1.html
 
@@ -1192,7 +1213,8 @@ static int cmd_help (int argc, char **argv)
      */
     p = getenv ("HOME");
     if (p != NULL) {
-        snprintf (name, sizeof name, "%s/.local/share/applications/preferred-web-browser.desktop", p);
+        name = (char *) alloca (strlen (p) + 60);
+        sprintf (name, "%s/.local/share/applications/preferred-web-browser.desktop", p);
         file = fopen (name, "r");
         if (file != NULL) goto findexec;
     }
@@ -1200,6 +1222,7 @@ static int cmd_help (int argc, char **argv)
     /*
      * Search /usr/share/applications/mimeinfo.cache for a line saying what app reads text/html files.
      */
+    name = (char *) alloca (40);
     strcpy (name, "/usr/share/applications/mimeinfo.cache");
     file = fopen (name, "r");
     if (file == NULL) {
@@ -1207,25 +1230,30 @@ static int cmd_help (int argc, char **argv)
         goto alt;
     }
     while (true) {
-        if (fgets (buff, sizeof buff, file) == NULL) {
+        buff = afgetln (file);
+        if (buff == NULL) {
             fclose (file);
             fprintf (stderr, "ftbackup: can't find text/html= in %s\n", name);
             goto alt;
         }
-        p = strchr (buff, '\n');
-        if (p == NULL) continue;
-        *p = 0;
         if (strncasecmp (buff, "text/html=", 10) == 0) break;
+        free (buff);
     }
     fclose (file);
 
     /*
      * Search the application file for the command line.
      */
+    len  = 0;
+    name = NULL;
     for (p = buff + 10;; p = ++ q) {
         q = strchr (p, ';');
         if (q != NULL) *q = 0;
-        snprintf (name, sizeof name, "/usr/share/applications/%s", p);
+        if (len < strlen (p) + 26) {
+            len  = strlen (p) + 26;
+            name = (char *) alloca (len);
+        }
+        sprintf (name, "/usr/share/applications/%s", p);
         file = fopen (name, "r");
         if (file != NULL) break;
         if ((errno != ENOENT) || (q == NULL)) {
@@ -1233,18 +1261,21 @@ static int cmd_help (int argc, char **argv)
             if (q == NULL) goto alt;
         }
     }
+    free (buff);
 
+    /*
+     * Command line given by 'exec='command.
+     */
 findexec:
     while (true) {
-        if (fgets (buff, sizeof buff, file) == NULL) {
+        buff = afgetln (file);
+        if (buff == NULL) {
             fclose (file);
             fprintf (stderr, "ftbackup: can't find exec= in %s\n", name);
             goto alt;
         }
-        p = strchr (buff, '\n');
-        if (p == NULL) continue;
-        *p = 0;
         if (strncasecmp (buff, "exec=", 5) == 0) break;
+        free (buff);
     }
     fclose (file);
 
@@ -1252,20 +1283,13 @@ findexec:
      * The line contains %u or %U for place to put a URL.
      * Or it contains %f or %F for place to file a filename.
      */
+    buff = (char *) realloc (buff, strlen (buff) + 8 + strlen (html));
+    if (buff == NULL) NOMEM ();
     p = strstr (buff + 5, "%u");
     if (p == NULL) p = strstr (buff + 5, "%U");
     if (p != NULL) {
         strcpy (p, "file://");
-        p += strlen (p);
-        q  = argv[-1];
-        if (q[0] != '/') {
-            UNUSED (getcwd (p, buff + sizeof buff - p));
-            p += strlen (p);
-            if (p[-1] != '/') *(p ++) = '/';
-            while (memcmp (q, "./", 2) == 0) q += 2;
-        }
-        strcpy (p, q);
-        strcat (p, ".html");
+        strcpy (p + 7, html);
         p = buff + 5;
         goto spawn;
     }
@@ -1273,26 +1297,61 @@ findexec:
     p = strstr (buff + 5, "%f");
     if (p == NULL) p = strstr (buff + 5, "%F");
     if (p != NULL) {
-        strcpy (p, argv[-1]);
-        strcat (p, ".html");
+        strcpy (p, html);
         p = buff + 5;
         goto spawn;
     }
 
+    /*
+     * Can't find web browser command.
+     */
     fprintf (stderr, "ftbackup: can't find %%f,%%F,%%u,%%U tag in %s of %s\n", buff + 5, name);
 alt:
     fprintf (stderr, "ftbackup: open %s.html in web browser\n", argv[-1]);
+    free (buff);
     return 1;
 
+    /*
+     * Start web browser.
+     */
 spawn:
     fprintf (stderr, "ftbackup: spawning %s\n", p);
     file = popen (p, "w");
     if (file == NULL) {
         fprintf (stderr, "ftbackup: popen(%s) error: %s\n", p, mystrerr (errno));
+        free (buff);
         return 1;
     }
     pclose (file);
+    free (buff);
     return 0;
+}
+
+/**
+ * @brief Read line from file
+ * @returns NULL: end of file
+ *          else: pointer to malloc()d line buffer, null terminated (no newline)
+ */
+static char *afgetln (FILE *file)
+{
+    char *buf, *p;
+    uint32_t len, ofs;
+
+    len = 128;
+    buf = (char *) malloc (len);
+    if (buf == NULL) NOMEM ();
+    for (ofs = 0; fgets (buf + ofs, len - ofs, file) != NULL; ofs = strlen (buf)) {
+        p = strchr (buf, '\n');
+        if (p != NULL) {
+            *p = 0;
+            return buf;
+        }
+        len += len / 2;
+        buf  = (char *) realloc (buf, len);
+        if (buf == NULL) NOMEM ();
+    }
+    free (buf);
+    return NULL;
 }
 
 /**
