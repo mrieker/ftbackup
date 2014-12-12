@@ -61,8 +61,6 @@ static int cmd_history (int argc, char **argv);
 static bool sanitizedatestr (char *outstr, char const *instr);
 static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards, bool del);
 static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards);
-static int cmd_images (int argc, char **argv);
-static bool copyfile (char const *q, char const *outdir, char const *p);
 static int cmd_license (int argc, char **argv);
 static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv, IFSAccess *tfs);
@@ -380,7 +378,6 @@ int main (int argc, char **argv)
         if (strcasecmp (argv[1], "diff")    == 0) return cmd_diff    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "help")    == 0) return cmd_help    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "history") == 0) return cmd_history (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "images")  == 0) return cmd_images  (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "license") == 0) return cmd_license (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "list")    == 0) return cmd_list    (argc - 1, argv + 1);
         if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1, &fullFSAccess);
@@ -393,7 +390,6 @@ int main (int argc, char **argv)
     fprintf (stderr, "       ftbackup diff ...\n");
     fprintf (stderr, "       ftbackup help\n");
     fprintf (stderr, "       ftbackup history ...\n");
-    fprintf (stderr, "       ftbackup images ...\n");
     fprintf (stderr, "       ftbackup license\n");
     fprintf (stderr, "       ftbackup list ...\n");
     fprintf (stderr, "       ftbackup restore ...\n");
@@ -1797,106 +1793,6 @@ static int cmd_history_list (char const *sssince, char const *ssbefore, char con
     sqlite3_finalize (instsel);
     sqlite3_close (histdb);
     return EX_OK;
-}
-
-/**
- * @brief Copy needed shareable images.
- */
-static int cmd_images (int argc, char **argv)
-{
-    bool self;
-    char const *outdir;
-    char lddbuff[4096], *p, *q, *r;
-    FILE *lddfile;
-    int i;
-
-    self = false;
-    outdir = NULL;
-    for (i = 0; ++ i < argc;) {
-        if (argv[i][0] == '-') {
-            if (strcasecmp (argv[i], "-self") == 0) {
-                self = true;
-                continue;
-            }
-            fprintf (stderr, "ftbackup: unknown option %s\n", argv[i]);
-            goto usage;
-        }
-        if (outdir != NULL) goto usage;
-        outdir = argv[i];
-    }
-    if (outdir == NULL) goto usage;
-    outdir = argv[1];
-
-    if (self) {
-        p = strrchr (argv[-1], '/');
-        p = (p == NULL) ? argv[-1] : p + 1;
-        copyfile (argv[-1], outdir, p);
-    }
-
-    /*
-        linux-vdso.so.1 =>  (0x00007fffa0dff000)
-        libsqlite3.so.0 => /usr/lib64/libsqlite3.so.0 (0x000000377f000000)
-        libpthread.so.0 => /lib64/libpthread.so.0 (0x0000003769c00000)
-        librt.so.1 => /lib64/librt.so.1 (0x000000376a400000)
-        libz.so.1 => /lib64/libz.so.1 (0x000000376a000000)
-        libstdc++.so.6 => /usr/lib64/libstdc++.so.6 (0x0000003775800000)
-        libm.so.6 => /lib64/libm.so.6 (0x0000003769000000)
-        libgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000003774c00000)
-        libc.so.6 => /lib64/libc.so.6 (0x0000003769400000)
-        libdl.so.2 => /lib64/libdl.so.2 (0x0000003769800000)
-        /lib64/ld-linux-x86-64.so.2 (0x0000003768c00000)
-     */
-
-    char lddname[strlen(argv[-1])+8];
-    sprintf (lddname, "ldd '%s'", argv[-1]);
-    lddfile = popen (lddname, "r");
-    if (lddfile == NULL) {
-        fprintf (stderr, "ftbackup: popen(%s) error: %s\n", lddname, mystrerr (errno));
-        return EX_CMD;
-    }
-    while (fgets (lddbuff, sizeof lddbuff, lddfile) != NULL) {
-
-        // point 'p' at simple image name
-        for (p = lddbuff; *p != 0; p ++) if (*p > ' ') break;
-
-        // point 'q' at separator arrow
-        q = strstr (p, " => ");
-        if (q == NULL) continue;
-
-        // null terminate simple image name and point to full image name
-        *q = 0;
-        q += 4;
-
-        // point 'r' at end of full image name and null terminate full image name
-        r = strstr (q, " (0x");
-        if (r == NULL) continue;
-        *r = 0;
-
-        // some don't have full image name
-        if (*q == 0) continue;
-
-        if (!copyfile (q, outdir, p)) {
-            pclose (lddfile);
-            return EX_CMD;
-        }
-    }
-    pclose (lddfile);
-    return EX_OK;
-
-usage:
-    fprintf (stderr, "usage: ftbackup images [-self] <outputdirectory>\n");
-    return EX_CMD;
-}
-
-static bool copyfile (char const *q, char const *outdir, char const *p)
-{
-    char cpname[strlen(q)+strlen(outdir)+strlen(p)+60];
-    sprintf (cpname, "cp --force --preserve=mode,timestamps --verbose '%s' '%s/%s'", q, outdir, p);
-    int rc = system (cpname);
-    if (rc != 0) {
-        fprintf (stderr, "ftbackup: system(%s) error %d\n", cpname, rc);
-    }
-    return rc == 0;
 }
 
 /**

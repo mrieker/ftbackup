@@ -29,8 +29,6 @@
                 <LI><B>help</B> : display this file in web browser
                 <LI><A HREF="#history"><B>history</B></A> : look up files saved
                     in database
-                <LI><A HREF="#images"><B>images</B></A> : copy needed image
-                    files to a directory
                 <LI><B>license</B> : print out the license info
                 <LI><A HREF="#list"><B>list</B></A> : list files saved in an
                     archive
@@ -310,30 +308,6 @@
             <LI><B><I>wildcard</I></B> - <A HREF="#wildcard">wildcard</A> of 
                 savesets to list, default is to list all savesets in the 
                 database
-        </UL>
-        <A NAME="images"><HR></A>
-        <H3>ftbackup images [-self] <I>directory</I></H3>
-        <UL>
-            <LI><B>-self</B> : copy the <TT>ftbackup</TT> image itself as well
-                as <TT>.so</TT> files, default is to copy just the <TT>.so</TT>
-                files
-            <LI><B><I>directory</I></B> : directory to copy the image files,
-                <TT>ftbackup</TT> and referenced <TT>.so</TT> files
-        </UL>
-        <A NAME="list"><HR></A>
-        <H3>ftbackup list <I>options</I> <I>saveset</I></H3>
-        <UL>
-            <LI><B><I>options</I></B>
-                <UL>
-                    <LI><B>-atime</B> : list the file's atime instead of mtime
-                    <LI><B>-ctime</B> : list the file's ctime instead of mtime
-                    <LI><B>-decrypt [:<I>cipher</I>] [:<I>hash</I>]
-                        <I>key</I></B> : as given to <B>-encrypt</B> when
-                        saveset written.
-                    <LI><B>-simrderrs <I>prob</I></B> : simulate read error
-                        with probability of 1 out of <I>prob</I> blocks.
-                </UL>
-            <LI><B><I>saveset</I></B> : name of archive to be listed.
         </UL>
         <A NAME="restore"><HR></A>
         <H3>ftbackup restore <I>options</I> <I>saveset</I> {<I>savewildcard</I>
