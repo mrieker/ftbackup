@@ -2146,33 +2146,41 @@ FTBackup::~FTBackup ()
  */
 void FTBackup::print_header (FILE *out, Header const *hdr, char const *name)
 {
-    char ftype, prots[10];
+    char ftype, prots[10], xatts;
+    mode_t stmode;
     struct tm lcl;
     time_t sec;
 
-    ftype =
-        S_ISREG  (hdr->stmode) ? ((hdr->flags & HFL_HDLINK) ? 'h' : '-') :
-        S_ISDIR  (hdr->stmode) ? 'd' :
-        S_ISLNK  (hdr->stmode) ? 'l' :
-        S_ISFIFO (hdr->stmode) ? 'p' :
-        S_ISBLK  (hdr->stmode) ? 'b' :
-        S_ISCHR  (hdr->stmode) ? 'c' : '?';
+    stmode = hdr->stmode;
 
-    prots[0] = (hdr->stmode & 0400) ? 'r' : '-';
-    prots[1] = (hdr->stmode & 0200) ? 'w' : '-';
-    prots[2] = (hdr->stmode & 0100) ? 'x' : '-';
-    prots[3] = (hdr->stmode & 0040) ? 'r' : '-';
-    prots[4] = (hdr->stmode & 0020) ? 'w' : '-';
-    prots[5] = (hdr->stmode & 0010) ? 'x' : '-';
-    prots[6] = (hdr->stmode & 0004) ? 'r' : '-';
-    prots[7] = (hdr->stmode & 0002) ? 'w' : '-';
-    prots[8] = (hdr->stmode & 0001) ? 'x' : '-';
+    ftype =
+        S_ISREG  (stmode) ? ((hdr->flags & HFL_HDLINK) ? 'h' : '-') :
+        S_ISDIR  (stmode) ? 'd' :
+        S_ISLNK  (stmode) ? 'l' :
+        S_ISFIFO (stmode) ? 'p' :
+        S_ISBLK  (stmode) ? 'b' :
+        S_ISCHR  (stmode) ? 'c' : '?';
+
+    prots[0] = (stmode & S_IRUSR) ? 'r' : '-';
+    prots[3] = (stmode & S_IRGRP) ? 'r' : '-';
+    prots[6] = (stmode & S_IROTH) ? 'r' : '-';
+
+    prots[1] = (stmode & S_IWUSR) ? 'w' : '-';
+    prots[4] = (stmode & S_IWGRP) ? 'w' : '-';
+    prots[7] = (stmode & S_IWOTH) ? 'w' : '-';
+
+    prots[2] = (stmode & S_IXUSR) ? ((stmode & S_ISUID) ? 's' : 'x') : ((stmode & S_ISUID) ? 'S' : '-');
+    prots[5] = (stmode & S_IXGRP) ? ((stmode & S_ISGID) ? 's' : 'x') : ((stmode & S_ISGID) ? 'S' : '-');
+    prots[8] = (stmode & S_IXOTH) ? ((stmode & S_ISVTX) ? 't' : 'x') : ((stmode & S_ISVTX) ? 'T' : '-');
+
     prots[9] = 0;
+
+    xatts = (hdr->flags & HFL_XATTRS) ? '.' : ' ';
 
     sec = hdr->mtimns / 1000000000;
     lcl = *localtime (&sec);
-    fprintf (out, "%c%s  %6u/%6u  %12llu  %04d-%02d-%02d %02d:%02d:%02d.%09lld  %s\n",
-        ftype, prots, hdr->ownuid, hdr->owngid, hdr->size,
+    fprintf (out, "%c%s%c  %6u/%6u  %12llu  %04d-%02d-%02d %02d:%02d:%02d.%09lld  %s\n",
+        ftype, prots, xatts, hdr->ownuid, hdr->owngid, hdr->size,
         lcl.tm_year + 1900, lcl.tm_mon + 1, lcl.tm_mday, lcl.tm_hour, lcl.tm_min, lcl.tm_sec,
         hdr->mtimns % 1000000000, name);
 }
