@@ -2248,6 +2248,7 @@ uint32_t FTBackup::hashsize ()
  */
 void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
 {
+#ifdef __amd64__
     uint32_t nqd;
     uint64_t tmp;
 
@@ -2274,6 +2275,13 @@ void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
                 : "=r" (nqd), "+r" (src), "+r" (dst)
                 : : "cc", "memory");
     }
+#else
+    uint32_t *du32 = (uint32_t *) dst;
+    uint32_t const *su32 = (uint32_t const *) src;
+    uint32_t nu32 = nby / 4;
+    do *(du32 ++) ^= *(su32 ++);
+    while (-- nu32 > 0);
+#endif
 }
 
 /**
