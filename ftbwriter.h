@@ -42,11 +42,12 @@ struct FTBWriter : FTBackup {
     bool opt_verbose;
     char const *histdbname;
     char const *histssname;
+    char const *opt_record;
+    char const *opt_since;
     int ioptions;
     int ooptions;
     int opt_verbsec;
     uint64_t opt_segsize;
-    uint64_t opt_since;
 
     IFSAccess *tfs;     // target filesystem, ie, filesystem being backed up
 
@@ -72,9 +73,13 @@ private:
     Block **xorblocks;
     bool zisopen;
     char const *ssbasename;
+    char *reconamebuf;
+    char *sincpathb;
     char *sssegname;
     dev_t inodesdevno;
     FILE *noncefile;
+    FILE *recofile;
+    FILE *sincfile;
     ino_t *inodeslist;
     int ssfd;
     SkipName *skipnames;
@@ -84,10 +89,13 @@ private:
     uint32_t lastfileno;
     uint32_t lastseqno;
     uint32_t lastxorno;
+    uint32_t reconamelen;
+    uint32_t sincpaths;
     uint32_t thissegno;
     uint64_t byteswrittentoseg;
     uint64_t *inodesmtim;
     uint64_t rft_runtime;
+    uint64_t sincctime;
     z_stream zstrm;
 
     SlotQueue<void *>    frbufqueue;  // free buffers for reading files
@@ -96,6 +104,8 @@ private:
     SlotQueue<HistSlot>  histqueue;   // filenames to be written to history
     SlotQueue<Block *>   writequeue;  // blocks to be written to saveset
 
+    bool skipbysince (Header const *hdr);
+    void maybe_record_file (uint64_t ctime, char const *name);
     bool write_file (char const *path, struct stat const *dirstat);
     bool write_regular (Header *hdr, struct stat const *dirstat);
     bool write_directory (Header *hdr, struct stat const *statbuf);

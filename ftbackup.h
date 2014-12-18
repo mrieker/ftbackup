@@ -160,6 +160,7 @@ struct IFSAccess {
 
 #define MYEDATACMP 632396223
 #define MYESIMRDER 632396224
+#define MYENDOFILE 632396225
 char const *mystrerr (int err);
 int wildcardlength (char const *wild);
 bool wildcardchar (char c);

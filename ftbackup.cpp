@@ -39,9 +39,6 @@ static char const *gpl = "\
 #include <termios.h>
 
 static int cmd_backup (int argc, char **argv);
-static bool write_nanos_to_file (uint64_t nanos, char const *name);
-static uint64_t read_nanos_from_file (char const *name);
-
 static int cmd_diff (int argc, char **argv);
 static bool diff_file (char const *path1, char const *path2);
 static char *formatime (char *buff, time_t time);
@@ -458,7 +455,7 @@ static int cmd_backup (int argc, char **argv)
             }
             if (strcasecmp (argv[i], "-record") == 0) {
                 if (++ i >= argc) goto usage;
-                if (!write_nanos_to_file (0, argv[i])) return EX_CMD;
+                ftbwriter.opt_record = argv[i];
                 continue;
             }
             if (strcasecmp (argv[i], "-segsize") == 0) {
@@ -472,8 +469,7 @@ static int cmd_backup (int argc, char **argv)
             }
             if (strcasecmp (argv[i], "-since") == 0) {
                 if (++ i >= argc) goto usage;
-                ftbwriter.opt_since = read_nanos_from_file (argv[i]);
-                if (ftbwriter.opt_since == 0) return EX_CMD;
+                ftbwriter.opt_since = argv[i];
                 continue;
             }
             if (strcasecmp (argv[i], "-verbose") == 0) {
@@ -572,81 +568,6 @@ usage:
     fprintf (stderr, "                            default is %u,%u\n", DEFXORSC, DEFXORGC);
     fprintf (stderr, "  Note: restore must have enough memory for bs*(xorsc*xorsc+1) bytes.\n");
     return EX_CMD;
-}
-
-/**
- * @brief Write number of nanoseconds to a file in an human readable format.
- * @param nanos = number of nanoseconds since Jan 1, 1970 0:0:0 UTC (or 0 for current time)
- * @param name = name of file to write to
- */
-static bool write_nanos_to_file (uint64_t nanos, char const *name)
-{
-    FILE *file;
-    struct timespec structts;
-    struct tm structtm;
-
-    if (nanos == 0) {
-        if (clock_gettime (CLOCK_REALTIME, &structts) < 0) SYSERRNO (clock_gettime);
-    } else {
-        structts.tv_sec  = nanos / 1000000000;
-        structts.tv_nsec = nanos % 1000000000;
-    }
-
-    structtm = *gmtime (&structts.tv_sec);
-
-    file = fopen (name, "w");
-    if (file == NULL) {
-        fprintf (stderr, "ftbackup: error creating %s\n", name);
-        return false;
-    }
-
-    fprintf (file, "%04d-%02d-%02d %02d:%02d:%02d.%09ld\n",
-        structtm.tm_year + 1900, structtm.tm_mon + 1, structtm.tm_mday,
-        structtm.tm_hour, structtm.tm_min, structtm.tm_sec,
-        structts.tv_nsec);
-
-    if (fclose (file) < 0) {
-        fprintf (stderr, "ftbackup: error closing %s\n", name);
-        return false;
-    }
-
-    return true;
-}
-
-/**
- * @brief Read nanosecond time as written by write_nanos_to_file().
- * @param name = name of file to read
- * @returns 0: read/decode error
- *       else: number of nanoseconds since Jan 1, 1970 0:0:0 UTC
- */
-static uint64_t read_nanos_from_file (char const *name)
-{
-    FILE *file;
-    struct tm structtm;
-    time_t secs;
-    uint32_t nanos;
-
-    memset (&structtm, 0, sizeof structtm);
-    nanos = 0;
-
-    file = fopen (name, "r");
-    if (file == NULL) {
-        fprintf (stderr, "ftbackup: error opening %s\n", name);
-        return 0;
-    }
-    if (fscanf (file, "%d-%d-%d %d:%d:%d.%u",
-        &structtm.tm_year, &structtm.tm_mon, &structtm.tm_mday,
-        &structtm.tm_hour, &structtm.tm_min, &structtm.tm_sec, &nanos) != 7) {
-        fprintf (stderr, "ftbackup: error reading %s\n", name);
-        fclose (file);
-        return 0;
-    }
-    fclose (file);
-
-    structtm.tm_year -= 1900;
-    structtm.tm_mon  --;
-    secs = timegm (&structtm);
-    return secs * 1000000000ULL + nanos;
 }
 
 /**
@@ -2537,13 +2458,13 @@ static bool readpasswd (char const *prompt, char *pwbuff, size_t pwsize)
     do {
         rc = write (ttyfd, prompt, promptlen);
         if (rc < promptlen) {
-            if (rc >= 0) errno = EPIPE;
+            if (rc >= 0) errno = MYENDOFILE;
             fprintf (stderr, "write(/dev/tty) error: %s\n", mystrerr (errno));
             goto err1;
         }
         rc = read (ttyfd, pwbuff, pwsize);
         if (rc <= 0) {
-            if (rc == 0) errno = EPIPE;
+            if (rc == 0) errno = MYENDOFILE;
             fprintf (stderr, "read(/dev/tty) error: %s\n", mystrerr (errno));
             goto err1;
         }
@@ -2570,6 +2491,7 @@ char const *mystrerr (int err)
 {
     if (err == MYEDATACMP) return "data compare mismatch";
     if (err == MYESIMRDER) return "simulated read error";
+    if (err == MYENDOFILE) return "end of file";
     return strerror (err);
 }
 

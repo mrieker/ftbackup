@@ -26,6 +26,7 @@ struct SkipName {
     char wild[1];       // wildcard line from the ~SKIPNAMES.FTB file
 };
 
+static int pathcmp (char const *p1, char const *p2);
 static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val);
 static bool skipbyname (SkipName *skipname, char const *path);
 static uint64_t getruntime ();
@@ -37,18 +38,23 @@ FTBWriter::FTBWriter ()
     opt_verbose    = 0;
     histdbname     = NULL;
     histssname     = NULL;
+    opt_record     = NULL;
+    opt_since      = NULL;
     ioptions       = 0;
     ooptions       = 0;
     opt_verbsec    = 0;
     opt_segsize    = 0;
-    opt_since      = 0;
 
     xorblocks      = NULL;
     zisopen        = false;
+    reconamebuf    = NULL;
     ssbasename     = NULL;
+    sincpathb      = NULL;
     sssegname      = NULL;
     inodesdevno    = 0;
     noncefile      = NULL;
+    recofile       = NULL;
+    sincfile       = NULL;
     inodeslist     = NULL;
     ssfd           = -1;
     skipnames      = NULL;
@@ -58,6 +64,8 @@ FTBWriter::FTBWriter ()
     lastfileno     = 0;
     lastseqno      = 0;
     lastxorno      = 0;
+    reconamelen    = 0;
+    sincpaths      = 0;
     thissegno      = 0;
     byteswrittentoseg = 0;
     inodesmtim     = NULL;
@@ -85,8 +93,24 @@ FTBWriter::~FTBWriter ()
         free (xorblocks);
     }
 
+    if (reconamebuf != NULL) {
+        free (reconamebuf);
+    }
+
+    if (sincpathb != NULL) {
+        free (sincpathb);
+    }
+
     if (noncefile != NULL) {
         fclose (noncefile);
+    }
+
+    if (recofile != NULL) {
+        fclose (recofile);
+    }
+
+    if (sincfile != NULL) {
+        fclose (sincfile);
     }
 
     if (inodeslist != NULL) {
@@ -143,6 +167,25 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     void *buf;
 
     maybesetdefaulthasher ();
+
+    /*
+     * Open record and since files if any.
+     */
+    if (opt_since != NULL) {
+        sincfile = fopen (opt_since, "r");
+        if (sincfile == NULL) {
+            fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", opt_since, mystrerr (errno));
+            return EX_SSIO;
+        }
+    }
+    if (opt_record != NULL) {
+        unlink (opt_record);  // since and record could be same name
+        recofile = fopen (opt_record, "w");
+        if (recofile == NULL) {
+            fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", opt_record, mystrerr (errno));
+            return EX_SSIO;
+        }
+    }
 
     /*
      * Create saveset file.
@@ -239,6 +282,23 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
         return EX_SSIO;
     }
     ssfd = -1;
+
+    /*
+     * Close record and since files too.
+     */
+    if (sincfile != NULL) {
+        fclose (sincfile);
+        sincfile = NULL;
+    }
+
+    if (recofile != NULL) {
+        rc = fclose (recofile);
+        recofile = NULL;
+        if (rc < 0) {
+            fprintf (stderr, "ftbackup: fclose(%s) error: %s\n", opt_record, mystrerr (errno));
+            return EX_SSIO;
+        }
+    }
 
     return ok ? EX_OK : EX_FILIO;
 }
@@ -376,6 +436,26 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
     return ok;
 }
 
+/**
+ * @brief Determine order that two paths get written to saveset.
+ * @returns < 0: p1 comes before p2 in saveset
+ *         == 0: p1 is the same as p2
+ *          > 0: p1 comes after p2 in saveset
+ */
+static int pathcmp (char const *p1, char const *p2)
+{
+    char c1, c2;
+
+    while ((c1 = *(p1 ++)) == (c2 = *(p2 ++))) {
+        if (c1 == 0) return 0;
+    }
+    if (c1 == 0)   return -1;  // abc always comes before abc<anythingelse>
+    if (c2 == 0)   return  1;
+    if (c1 == '/') return -1;  // abc/<somethingmaybenothing> always comes before abc<anythingelse>
+    if (c2 == '/') return  1;
+    return (int) c1 - (int) c2;
+}
+
 static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val)
 {
     while (val > 0x7F) {
@@ -401,7 +481,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     /*
      * Only back up regular files changed since the -since option value.
      */
-    if (hdr->ctimns < opt_since) return true;
+    if (skipbysince (hdr)) return true;
 
     /*
      * If same inode as a previous file, say this is an hardlink.
@@ -631,7 +711,7 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     /*
      * Write directory contents to saveset iff changed since the -since option value.
      */
-    if (hdr->ctimns >= opt_since) {
+    if (!skipbysince (hdr)) {
 
         /*
          * Write header out with hdr->size = total of all those sizes with null terminators.
@@ -732,13 +812,14 @@ bool FTBWriter::write_mountpoint (Header *hdr)
     /*
      * Only back up mountpoints changed since the -since option value.
      */
-    if (hdr->ctimns < opt_since) return true;
+    if (!skipbysince (hdr)) {
 
-    /*
-     * Write header out with hdr->size = 0 indicating an empty directory.
-     */
-    hdr->size = 0;
-    write_header (hdr);
+        /*
+         * Write header out with hdr->size = 0 indicating an empty directory.
+         */
+        hdr->size = 0;
+        write_header (hdr);
+    }
     return true;
 }
 
@@ -750,7 +831,7 @@ bool FTBWriter::write_symlink (Header *hdr)
     char *buf;
     int rc;
 
-    if (hdr->ctimns < opt_since) return true;
+    if (skipbysince (hdr)) return true;
 
     buf = (char *) malloc (hdr->size + 1);
     while (true) {
@@ -776,10 +857,11 @@ bool FTBWriter::write_symlink (Header *hdr)
  */
 bool FTBWriter::write_special (Header *hdr, dev_t strdev)
 {
-    if (hdr->ctimns < opt_since) return true;
-    hdr->size = sizeof strdev;
-    write_header (hdr);
-    write_raw (&strdev, sizeof strdev, false);
+    if (!skipbysince (hdr)) {
+        hdr->size = sizeof strdev;
+        write_header (hdr);
+        write_raw (&strdev, sizeof strdev, false);
+    }
     return true;
 }
 
@@ -795,8 +877,111 @@ void FTBWriter::write_header (Header *hdr)
             lastverbsec = time (NULL);
             print_header (stderr, hdr, hdr->name);
         }
+        maybe_record_file (hdr->ctimns, hdr->name);
     }
     write_raw (hdr, (ulong_t)(&hdr->name[hdr->nameln]) - (ulong_t)hdr, true);
+}
+
+
+/**
+ * @brief Skip if listed in the since file.
+ */
+bool FTBWriter::skipbysince (Header const *hdr)
+{
+    int rc;
+    uint16_t skip;
+    uint32_t i;
+
+    if (sincfile == NULL) return false;
+
+    /*
+     * Read records in since file until we get a path that is .ge. this file's path.
+     */
+    while ((sincpathb == NULL) || ((rc = pathcmp (sincpathb, hdr->name)) < 0)) {
+        rc = fread (&sincctime, sizeof sincctime, 1, sincfile);
+        if (rc < 0) {
+            fprintf (stderr, "ftbackup: fread(%s) error: %s\n", opt_since, mystrerr (errno));
+        }
+        if (rc <= 0) {
+            fclose (sincfile);
+            sincfile = NULL;
+            return false;
+        }
+        rc = fread (&skip, sizeof skip, 1, sincfile);
+        if (rc <= 0) {
+            if (rc == 0) errno = MYENDOFILE;
+            fprintf (stderr, "ftbackup: fread(%s) error: %s\n", opt_since, mystrerr (errno));
+            fclose (sincfile);
+            sincfile = NULL;
+            return false;
+        }
+        i = skip;
+        do {
+            rc = fgetc (sincfile);
+            if (rc < 0) {
+                if (!ferror (sincfile)) errno = MYENDOFILE;
+                fprintf (stderr, "ftbackup: fgetc(%s) error: %s\n", opt_since, mystrerr (errno));
+                fclose (sincfile);
+                sincfile = NULL;
+                return false;
+            }
+            if (sincpaths <= i) {
+                sincpaths = i + 256;
+                sincpathb = (char *) realloc (sincpathb, sincpaths);
+                if (sincpathb == NULL) NOMEM ();
+            }
+            sincpathb[i++] = rc;
+        } while (rc != 0);
+    }
+
+    /*
+     * If this exact file is in since file without changes, skip it.
+     */
+    if ((rc == 0) && (hdr->ctimns == sincctime)) {
+        maybe_record_file (sincctime, sincpathb);
+        return true;
+    }
+    return false;
+}
+
+/**
+ * @brief Write file's ctime and name to the opt_record file if there is one.
+ */
+void FTBWriter::maybe_record_file (uint64_t ctime, char const *name)
+{
+    int rc;
+    uint16_t i;
+    uint32_t namelen;
+
+    if (recofile != NULL) {
+        rc = fwrite (&ctime, sizeof ctime, 1, recofile);
+        if (rc < 1) goto err;
+
+        i = 0;
+        if (reconamebuf != NULL) {
+            while ((i < 65535) && (reconamebuf[i] == name[i])) {
+                i ++;
+            }
+        }
+        rc = fwrite (&i, sizeof i, 1, recofile);
+        if (rc < 1) goto err;
+
+        namelen = strlen (name) + 1;
+        rc = fwrite (name + i, namelen - i, 1, recofile);
+        if (rc < 1) goto err;
+
+        if (reconamelen < namelen) {
+            reconamelen = namelen;
+            reconamebuf = (char *) realloc (reconamebuf, reconamelen);
+        }
+        memcpy (reconamebuf + i, name + i, namelen - i);
+    }
+    return;
+
+err:
+    if (rc == 0) errno = MYENDOFILE;
+    fprintf (stderr, "ftbackup: fwrite(%s) error: %s\n", opt_record, mystrerr (errno));
+    exit (EX_SSIO);
 }
 
 /**
