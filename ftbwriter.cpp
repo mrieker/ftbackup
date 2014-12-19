@@ -1648,28 +1648,15 @@ void FTBWriter::hash_xor_blocks ()
 }
 
 /**
- * @brief Maybe encrypt data, then hash it and write to saveset.
+ * @brief Hash, maybe encrypt, then write to saveset.
  */
 void FTBWriter::hash_block (Block *block)
 {
-    uint32_t bs, bsq, cbs, i;
+    uint32_t bs, cbs, i;
     uint64_t *array;
 
-    cbs = 0;
-    if (cipher != NULL) {
-
-        /*
-         * Fill in the nonce with a random number to salt the encryption.
-         */
-        cbs = cipher->BlockSize ();
-        if (fread (&block->nonce[sizeof block->nonce-cbs], cbs, 1, noncefile) != 1) {
-            fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
-            abort ();
-        }
-    }
-
     /*
-     * Hash the nonce and the data.
+     * Hash the header and the data.
      */
     bs = (1U << l2bs) - hashsize ();
     hasher->Update ((uint8_t *)block, bs);
@@ -1678,41 +1665,39 @@ void FTBWriter::hash_block (Block *block)
     if (cipher != NULL) {
 
         /*
-         * Make sure the 'i = 4' in the for loops below will work.
-         *
-         *  +-----------------------+
-         *  |  16 bytes of magic    |
-         *  |  ...and block number  |
-         *  +-----------------------+
-         *  |  16 bytes of nonce    |
-         *  |                       |
-         *  +-----------------------+
-         *  |  data to encrypt ...  | i = 4: quadword[4]
+         * Fill in the nonce with a random number to salt the encryption.
          */
-        if (sizeof block->nonce != 16) abort ();
-        if (offsetof (Block, nonce) != 16) abort ();
+        cbs = cipher->BlockSize ();
+        bs  = (1U << l2bs) - cbs;
+        if (fread ((uint8_t *) block + bs, cbs, 1, noncefile) != 1) {
+            fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
+            abort ();
+        }
 
         /*
          * Use nonce for init vector and encrypt the block, including the hash,
          * Leave magic number and everything else before nonce in plain text.
          */
         // CBC: enc[i] = encrypt ( clr[i] ^ enc[i-1] )
+        if (offsetof (Block, data) % 16 != 0) abort ();
         array = (uint64_t *) block;
-        bsq = 1U << (l2bs - 3);
+        i     = bs / 8;
         switch (cbs) {
-            case 8: {
-                for (i = 4; i < bsq; i ++) {
-                    array[i] ^= array[i-1];
+            case  8: {
+                do {
+                    -- i;
+                    array[i] ^= array[i+1];
                     cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                }
+                } while (i > offsetof (Block, data) / 8);
                 break;
             }
             case 16: {
-                for (i = 4; i < bsq; i += 2) {
-                    array[i+0] ^= array[i-2];
-                    array[i+1] ^= array[i-1];
+                do {
+                    i -= 2;
+                    array[i+0] ^= array[i+2];
+                    array[i+1] ^= array[i+3];
                     cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                }
+                } while (i > offsetof (Block, data) / 8);
                 break;
             }
             default: abort ();

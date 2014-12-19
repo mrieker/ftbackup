@@ -2153,12 +2153,14 @@ bool FTBackup::blockbaseisvalid (Block *block)
 }
 
 /**
- * @brief Compute size of hash at end of data.
- * @return hash size in bytes
+ * @brief Compute size of hash and nonce at end of data.
+ * @return hash and nonce size in bytes
  */
 uint32_t FTBackup::hashsize ()
 {
-    return hasher->DigestSize ();
+    uint32_t hs = hasher->DigestSize ();
+    if (cipher != NULL) hs += cipher->BlockSize ();
+    return hs;
 }
 
 /**

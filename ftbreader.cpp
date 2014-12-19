@@ -977,7 +977,7 @@ void FTBReader::read_first_block ()
             fprintf (stderr, "ftbackup: pread(%llu) saveset error: %s\n", miniOffset,
                     ((rc > 0) ? "partial read" : (rc == 0) ? "end of file" : mystrerr (errno)));
             if (rc == 0) {
-                fprintf (stderr, "ftbackup: unable to locate a backup header\n");
+                fprintf (stderr, "ftbackup: unable to locate a block header\n");
                 throw new EndOfSSFile ();
             }
             if (bigBlock != NULL) {
@@ -1015,10 +1015,11 @@ void FTBReader::read_first_block ()
          */
         if (bytesCopied < bs) continue;
         tblock = &bigBlock->block;
-        if (!decrypt_block (tblock, bs)) continue;
-        xorgc = tblock->xorgc;
-        xorsc = tblock->xorsc;
-        if (blockisvalid (tblock)) break;
+        if (decrypt_block (tblock, bs)) {
+            xorgc = tblock->xorgc;
+            xorsc = tblock->xorsc;
+            if (blockisvalid (tblock)) break;
+        }
         free (bigBlock);
         bigBlock = NULL;
     }
@@ -1283,7 +1284,6 @@ noxoread:
             else if (gotxors[i] == linkedBlock->block.xorbc) {
                 xorblockdata (&linkedBlock->block, xorblocks[i], bsnh);
                 memset (linkedBlock->block.magic, 0, sizeof linkedBlock->block.magic);
-                memset (linkedBlock->block.nonce, 0, sizeof linkedBlock->block.nonce);
                 linkedBlock->block.xorno = 0;
                 linkedBlock->block.xorbc = 0;
                 for (i = 0; i < bsnh; i ++) {
@@ -1609,7 +1609,7 @@ long FTBReader::handle_pread_error (void *buf, long len, uint64_t pos)
 /**
  * @brief Decrypt the block's contents if -decrypt option was given.
  * @param block = block to decrypt
- * @param bs = block size in bytes, including block header and including hash on the end
+ * @param bs = block size in bytes, including block header and including hash and nonce on the end
  * @returns whether or not the hash validated
  */
 bool FTBReader::decrypt_block (Block *block, uint32_t bs)
@@ -1619,21 +1619,22 @@ bool FTBReader::decrypt_block (Block *block, uint32_t bs)
 
     if (cipher != NULL) {
         array = (uint64_t *) block;
-
+        i     = offsetof (Block, data) / 8;
         switch (cipher->BlockSize ()) {
-            case 8: {
-                for (i = bs / 8; -- i >= 4;) {
+            case  8: {
+                do {
                     cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                    array[i] ^= array[i-1];
-                }
+                    array[i] ^= array[i+1];
+                } while (++ i < (bs / 8) - 1);
                 break;
             }
             case 16: {
-                for (i = bs / 8; (i -= 2) >= 4;) {
+                do {
                     cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                    array[i+0] ^= array[i-2];
-                    array[i+1] ^= array[i-1];
-                }
+                    array[i+0] ^= array[i+2];
+                    array[i+1] ^= array[i+3];
+                    i += 2;
+                } while (i < (bs / 8) - 2);
                 break;
             }
             default: abort ();

@@ -79,12 +79,12 @@ struct Block {
     char        magic[8];   // magic number BLOCK_MAGIC
     uint32_t    seqno;      // block sequence number
     uint32_t    xorno;      // xor sequence number (0 for data blocks)
-    uint8_t     nonce[16];  // encryption nonce (zeroes if not encrypted)
     uint32_t    hdroffs;    // offset of first header in block
     uint8_t     l2bs;       // log2 block size
     uint8_t     xorbc;      // xor block count (0 for data blocks)
     uint8_t     xorgc;      // xor group count
     uint8_t     xorsc;      // xor span count
+    uint8_t     zeroes[8];  // padding to 16-byte boundary
     uint8_t     data[0];
 };
 
