@@ -1512,7 +1512,7 @@ void *FTBWriter::write_thread ()
     /*
      * Maybe get source of random numbers for the nonces.
      */
-    if (cipher != NULL) {
+    if (encipher != NULL) {
         noncefile = fopen ("/dev/urandom", "r");
         if (noncefile == NULL) {
             fprintf (stderr, "ftbackup: open(/dev/urandom) error: %s\n", mystrerr (errno));
@@ -1653,7 +1653,7 @@ void FTBWriter::hash_xor_blocks ()
 void FTBWriter::hash_block (Block *block)
 {
     uint32_t bs, cbs, i;
-    uint64_t *array;
+    uint64_t *array, temp[2];
 
     /*
      * Hash the header and the data.
@@ -1662,12 +1662,12 @@ void FTBWriter::hash_block (Block *block)
     hasher->Update ((uint8_t *)block, bs);
     hasher->Final  ((uint8_t *)block + bs);
 
-    if (cipher != NULL) {
+    if (encipher != NULL) {
 
         /*
          * Fill in the nonce with a random number to salt the encryption.
          */
-        cbs = cipher->BlockSize ();
+        cbs = encipher->BlockSize ();
         bs  = (1U << l2bs) - cbs;
         if (fread ((uint8_t *) block + bs, cbs, 1, noncefile) != 1) {
             fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
@@ -1675,29 +1675,27 @@ void FTBWriter::hash_block (Block *block)
         }
 
         /*
-         * Use nonce for init vector and encrypt the block, including the hash,
-         * Leave magic number and everything else before nonce in plain text.
+         * Use nonce for init vector and encrypt the block, including the hash.
+         * Leave magic number and everything else before data in plain text.
          */
-        // CBC: enc[i] = encrypt ( clr[i] ^ enc[i-1] )
-        if (offsetof (Block, data) % 16 != 0) abort ();
+        // modified CBC: enc[i] = encrypt ( clr[i] ^ encrypt ( enc[i+1] ))
+        if (offsetof (Block, crip) % 16 != 0) abort ();
         array = (uint64_t *) block;
         i     = bs / 8;
         switch (cbs) {
             case  8: {
                 do {
-                    -- i;
-                    array[i] ^= array[i+1];
-                    cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                } while (i > offsetof (Block, data) / 8);
+                    encipher->ProcessAndXorBlock ((byte *) &array[i], (byte *) &array[i-1], (byte *) temp);
+                    encipher->ProcessAndXorBlock ((byte *) temp, NULL, (byte *) &array[--i]);
+                } while (i > offsetof (Block, crip) / 8);
                 break;
             }
             case 16: {
                 do {
+                    encipher->ProcessAndXorBlock ((byte *) &array[i], (byte *) &array[i-2], (byte *) temp);
                     i -= 2;
-                    array[i+0] ^= array[i+2];
-                    array[i+1] ^= array[i+3];
-                    cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                } while (i > offsetof (Block, data) / 8);
+                    encipher->ProcessAndXorBlock ((byte *) temp, NULL, (byte *) &array[i]);
+                } while (i > offsetof (Block, crip) / 8);
                 break;
             }
             default: abort ();

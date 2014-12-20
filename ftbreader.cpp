@@ -1615,24 +1615,24 @@ long FTBReader::handle_pread_error (void *buf, long len, uint64_t pos)
 bool FTBReader::decrypt_block (Block *block, uint32_t bs)
 {
     uint32_t i;
-    uint64_t *array;
+    uint64_t *array, temp[2];
 
-    if (cipher != NULL) {
+    if (decipher != NULL) {
+        // modified CBC: clr[i] = decrypt ( enc[i] ) ^ encrypt ( enc[i+1] )
         array = (uint64_t *) block;
-        i     = offsetof (Block, data) / 8;
-        switch (cipher->BlockSize ()) {
+        i     = offsetof (Block, crip) / 8;
+        switch (decipher->BlockSize ()) {
             case  8: {
                 do {
-                    cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                    array[i] ^= array[i+1];
+                    encipher->ProcessAndXorBlock ((byte *) &array[i+1], NULL, (byte *) temp);
+                    decipher->ProcessAndXorBlock ((byte *) &array[i], (byte *) temp, (byte *) &array[i]);
                 } while (++ i < (bs / 8) - 1);
                 break;
             }
             case 16: {
                 do {
-                    cipher->ProcessAndXorBlock ((byte *) &array[i], NULL, (byte *) &array[i]);
-                    array[i+0] ^= array[i+2];
-                    array[i+1] ^= array[i+3];
+                    encipher->ProcessAndXorBlock ((byte *) &array[i+2], NULL, (byte *) temp);
+                    decipher->ProcessAndXorBlock ((byte *) &array[i], (byte *) temp, (byte *) &array[i]);
                     i += 2;
                 } while (i < (bs / 8) - 2);
                 break;

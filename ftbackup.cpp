@@ -2049,7 +2049,8 @@ FTBackup::FTBackup ()
     l2bs       = __builtin_ctz (DEFBLOCKSIZE);
     xorgc      = DEFXORGC;
     xorsc      = DEFXORSC;
-    cipher     = NULL;
+    decipher   = NULL;
+    encipher   = NULL;
     hasher     = NULL;
     hashinibuf = NULL;
     hashinilen = 0;
@@ -2057,7 +2058,8 @@ FTBackup::FTBackup ()
 
 FTBackup::~FTBackup ()
 {
-    if (cipher     != NULL) delete cipher;
+    if (decipher   != NULL) delete decipher;
+    if (encipher   != NULL) delete encipher;
     if (hasher     != NULL) delete hasher;
     if (hashinibuf != NULL) free (hashinibuf);
 }
@@ -2159,7 +2161,7 @@ bool FTBackup::blockbaseisvalid (Block *block)
 uint32_t FTBackup::hashsize ()
 {
     uint32_t hs = hasher->DigestSize ();
-    if (cipher != NULL) hs += cipher->BlockSize ();
+    if (encipher != NULL) hs += encipher->BlockSize ();
     return hs;
 }
 
@@ -2208,7 +2210,7 @@ void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
 }
 
 /**
- * @brief Decode command-line encrypt/decrypt arguments and fill in cipher, hasher, hashinibuf, hashinilen.
+ * @brief Decode command-line encrypt/decrypt arguments and fill in decipher, encipher, hasher, hashinibuf, hashinilen.
  *          -{de,en}crypt [:<blockciphername>] [:<passwordhasher>] <password>
  */
 int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
@@ -2222,24 +2224,27 @@ int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
 
     ciphername = DEF_CIPHERNAME;
     hashername = DEF_HASHERNAME;
-    cipher  = getciphercontext (ciphername, enc);
-    hasher  = gethashercontext (hashername);
-    keyline = NULL;
+    decipher   = getciphercontext (ciphername, false);
+    encipher   = getciphercontext (ciphername, true);
+    hasher     = gethashercontext (hashername);
+    keyline    = NULL;
 
     while (++ i < argc) {
         if (argv[i][0] == ':') {
-            newcipher = getciphercontext (argv[i] + 1, enc);
+            newcipher = getciphercontext (argv[i] + 1, false);
             if (newcipher != NULL) {
-                if (cipher != NULL) delete cipher;
+                if (decipher != NULL) delete decipher;
+                if (encipher != NULL) delete encipher;
                 ciphername = argv[i] + 1;
-                cipher = newcipher;
+                decipher   = newcipher;
+                encipher   = getciphercontext (ciphername, true);
                 continue;
             }
             newhasher = gethashercontext (argv[i] + 1);
             if (newhasher != NULL) {
                 if (hasher != NULL) delete hasher;
                 hashername = argv[i] + 1;
-                hasher = newhasher;
+                hasher    = newhasher;
                 continue;
             }
             fprintf (stderr, "ftbackup: unknown cipher/hasher %s\n", argv[i] + 1);
@@ -2253,7 +2258,7 @@ int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
         return -1;
     }
 
-    defkeylen  = cipher->DefaultKeyLength ();
+    defkeylen  = encipher->DefaultKeyLength ();
     hashinilen = hasher->DigestSize ();
     if (hashinilen < defkeylen) {
         fprintf (stderr, "ftbackup: hash %s size %u too small for cipher %s key size %lu\n",
@@ -2301,7 +2306,8 @@ int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
     if (hashinibuf == NULL) NOMEM ();
     hasher->Update ((byte const *) keyline, (size_t) strlen (keyline));
     hasher->Final (hashinibuf);
-    cipher->SetKey (hashinibuf, defkeylen, CryptoPP::g_nullNameValuePairs);
+    decipher->SetKey (hashinibuf, defkeylen, CryptoPP::g_nullNameValuePairs);
+    encipher->SetKey (hashinibuf, defkeylen, CryptoPP::g_nullNameValuePairs);
 
     return i;
 }
