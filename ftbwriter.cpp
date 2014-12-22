@@ -29,6 +29,7 @@ struct SkipName {
 static int pathcmp (char const *p1, char const *p2);
 static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val);
 static bool skipbyname (SkipName *skipname, char const *path);
+static bool writeall (int fd, uint8_t const *buf, int len);
 static uint64_t getruntime ();
 static void printthreadcputime (char const *name);
 static void printthreadruntime (char const *name, uint64_t runtime);
@@ -47,15 +48,14 @@ FTBWriter::FTBWriter ()
 
     xorblocks      = NULL;
     zisopen        = false;
-    reconamebuf    = NULL;
     ssbasename     = NULL;
     sincpathb      = NULL;
     sssegname      = NULL;
     inodesdevno    = 0;
     noncefile      = NULL;
-    recofile       = NULL;
-    sincfile       = NULL;
     inodeslist     = NULL;
+    recofd         = -1;
+    sincfd         = -1;
     ssfd           = -1;
     skipnames      = NULL;
     lastverbsec    = 0;
@@ -69,6 +69,8 @@ FTBWriter::FTBWriter ()
     thissegno      = 0;
     byteswrittentoseg = 0;
     inodesmtim     = NULL;
+    memset (&zreco, 0, sizeof zreco);
+    memset (&zsinc, 0, sizeof zsinc);
     memset (&zstrm, 0, sizeof zstrm);
 
     frbufqueue = SlotQueue<void *> ();
@@ -93,10 +95,6 @@ FTBWriter::~FTBWriter ()
         free (xorblocks);
     }
 
-    if (reconamebuf != NULL) {
-        free (reconamebuf);
-    }
-
     if (sincpathb != NULL) {
         free (sincpathb);
     }
@@ -105,12 +103,12 @@ FTBWriter::~FTBWriter ()
         fclose (noncefile);
     }
 
-    if (recofile != NULL) {
-        fclose (recofile);
+    if (recofd >= 0) {
+        close (recofd);
     }
 
-    if (sincfile != NULL) {
-        fclose (sincfile);
+    if (sincfd >= 0) {
+        close (sincfd);
     }
 
     if (inodeslist != NULL) {
@@ -172,19 +170,26 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
      * Open record and since files if any.
      */
     if (opt_since != NULL) {
-        sincfile = fopen (opt_since, "r");
-        if (sincfile == NULL) {
+        sincfd = open (opt_since, O_RDONLY);
+        if (sincfd < 0) {
             fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", opt_since, mystrerr (errno));
             return EX_SSIO;
         }
+        rc = inflateInit (&zsinc);
+        if (rc != Z_OK) INTERR (inflateInit, rc);
     }
+
     if (opt_record != NULL) {
         unlink (opt_record);  // since and record could be same name
-        recofile = fopen (opt_record, "w");
-        if (recofile == NULL) {
+        recofd = open (opt_record, O_CREAT | O_EXCL | O_WRONLY, 0666);
+        if (recofd < 0) {
             fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", opt_record, mystrerr (errno));
             return EX_SSIO;
         }
+        rc = deflateInit (&zreco, Z_BEST_SPEED);
+        if (rc != Z_OK) INTERR (deflateInit, rc);
+        zreco.next_out  = recozbuf;
+        zreco.avail_out = sizeof recozbuf;
     }
 
     /*
@@ -286,14 +291,30 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     /*
      * Close record and since files too.
      */
-    if (sincfile != NULL) {
-        fclose (sincfile);
-        sincfile = NULL;
+    if (sincfd >= 0) {
+        inflateEnd (&zsinc);
+        close (sincfd);
+        sincfd = -1;
     }
 
-    if (recofile != NULL) {
-        rc = fclose (recofile);
-        recofile = NULL;
+    if (recofd >= 0) {
+        do {
+            rc = deflate (&zreco, Z_FINISH);
+            if (zreco.avail_out < sizeof recozbuf) {
+                if (!writeall (recofd, recozbuf, sizeof recozbuf - zreco.avail_out)) {
+                    fprintf (stderr, "ftbackup: write(%s) error: %s\n", opt_record, mystrerr (errno));
+                    exit (EX_SSIO);
+                }
+                zreco.next_out  = recozbuf;
+                zreco.avail_out = sizeof recozbuf;
+            }
+        } while (rc == Z_OK);
+        if (rc != Z_STREAM_END) INTERR (deflate, rc);
+        rc = deflateEnd (&zreco);
+        if (rc != Z_OK) INTERR (deflateEnd, rc);
+
+        rc = close (recofd);
+        recofd = -1;
         if (rc < 0) {
             fprintf (stderr, "ftbackup: fclose(%s) error: %s\n", opt_record, mystrerr (errno));
             return EX_SSIO;
@@ -889,49 +910,24 @@ void FTBWriter::write_header (Header *hdr)
 bool FTBWriter::skipbysince (Header const *hdr)
 {
     int rc;
-    uint16_t skip;
     uint32_t i;
 
-    if (sincfile == NULL) return false;
+    if (sincfd < 0) return false;
 
     /*
      * Read records in since file until we get a path that is .ge. this file's path.
      */
     while ((sincpathb == NULL) || ((rc = pathcmp (sincpathb, hdr->name)) < 0)) {
-        rc = fread (&sincctime, sizeof sincctime, 1, sincfile);
-        if (rc < 0) {
-            fprintf (stderr, "ftbackup: fread(%s) error: %s\n", opt_since, mystrerr (errno));
-        }
-        if (rc <= 0) {
-            fclose (sincfile);
-            sincfile = NULL;
-            return false;
-        }
-        rc = fread (&skip, sizeof skip, 1, sincfile);
-        if (rc <= 0) {
-            if (rc == 0) errno = MYENDOFILE;
-            fprintf (stderr, "ftbackup: fread(%s) error: %s\n", opt_since, mystrerr (errno));
-            fclose (sincfile);
-            sincfile = NULL;
-            return false;
-        }
-        i = skip;
+        if (!read_sinc_data (&sincctime, sizeof sincctime)) return false;
+        i = 0;
         do {
-            rc = fgetc (sincfile);
-            if (rc < 0) {
-                if (!ferror (sincfile)) errno = MYENDOFILE;
-                fprintf (stderr, "ftbackup: fgetc(%s) error: %s\n", opt_since, mystrerr (errno));
-                fclose (sincfile);
-                sincfile = NULL;
-                return false;
-            }
             if (sincpaths <= i) {
                 sincpaths = i + 256;
                 sincpathb = (char *) realloc (sincpathb, sincpaths);
                 if (sincpathb == NULL) NOMEM ();
             }
-            sincpathb[i++] = rc;
-        } while (rc != 0);
+            if (!read_sinc_data (&sincpathb[i], sizeof sincpathb[i])) return false;
+        } while (sincpathb[i++] != 0);
     }
 
     /*
@@ -944,44 +940,91 @@ bool FTBWriter::skipbysince (Header const *hdr)
     return false;
 }
 
+bool FTBWriter::read_sinc_data (void *buf, uint32_t len)
+{
+    int rc;
+    uint32_t got;
+
+    while (len > 0) {
+
+        /*
+         * See if any expanded data available.
+         */
+        while ((got = zsinc.avail_out) == 0) {
+
+            /*
+             * See if any compressed data in buffer.
+             * If not, fill the compressed data buffer from file.
+             */
+            if (zsinc.avail_in == 0) {
+                rc = read (sincfd, sinczbuf, sizeof sinczbuf);
+                if (rc < 0) {
+                    fprintf (stderr, "ftbackup: read(%s) error: %s\n", opt_since, mystrerr (errno));
+                    return false;
+                }
+                if (rc == 0) return false;
+                zsinc.next_in  = sinczbuf;
+                zsinc.avail_in = rc;
+            }
+
+            /*
+             * Expand a chunk of compressed data.
+             */
+            zsinc.next_out  = sincxbuf;
+            zsinc.avail_out = sizeof sincxbuf;
+            rc = inflate (&zsinc, Z_SYNC_FLUSH);
+            if (rc == Z_STREAM_END) lseek (sincfd, 0, SEEK_END);
+            else if (rc != Z_OK) INTERR (inflate, rc);
+            zsinc.next_out  = sincxbuf;
+            zsinc.avail_out = sizeof sincxbuf - zsinc.avail_out;
+        }
+
+        /*
+         * Expanded data available, copy as much as we need.
+         */
+        if (got > len) got = len;
+        memcpy (buf, zsinc.next_out, got);
+        zsinc.next_out  += got;
+        zsinc.avail_out -= got;
+        buf  = (void *)((ulong_t)buf + got);
+        len -= got;
+    }
+    return true;
+}
+
 /**
  * @brief Write file's ctime and name to the opt_record file if there is one.
  */
 void FTBWriter::maybe_record_file (uint64_t ctime, char const *name)
 {
-    int rc;
-    uint16_t i;
     uint32_t namelen;
 
-    if (recofile != NULL) {
-        rc = fwrite (&ctime, sizeof ctime, 1, recofile);
-        if (rc < 1) goto err;
-
-        i = 0;
-        if (reconamebuf != NULL) {
-            while ((i < 65535) && (reconamebuf[i] == name[i])) {
-                i ++;
-            }
-        }
-        rc = fwrite (&i, sizeof i, 1, recofile);
-        if (rc < 1) goto err;
-
+    if (recofd >= 0) {
+        write_reco_data (&ctime, sizeof ctime);
         namelen = strlen (name) + 1;
-        rc = fwrite (name + i, namelen - i, 1, recofile);
-        if (rc < 1) goto err;
-
-        if (reconamelen < namelen) {
-            reconamelen = namelen;
-            reconamebuf = (char *) realloc (reconamebuf, reconamelen);
-        }
-        memcpy (reconamebuf + i, name + i, namelen - i);
+        write_reco_data (name, namelen);
     }
-    return;
+}
 
-err:
-    if (rc == 0) errno = MYENDOFILE;
-    fprintf (stderr, "ftbackup: fwrite(%s) error: %s\n", opt_record, mystrerr (errno));
-    exit (EX_SSIO);
+void FTBWriter::write_reco_data (void const *buf, uint32_t len)
+{
+    int rc;
+
+    zreco.next_in  = (Bytef *) buf;
+    zreco.avail_in = len;
+
+    while (zreco.avail_in > 0) {
+        rc = deflate (&zreco, Z_NO_FLUSH);
+        if (rc != Z_OK) INTERR (deflate, rc);
+        if ((zreco.avail_out == 0) || (zreco.avail_in > 0)) {
+            if (!writeall (recofd, recozbuf, sizeof recozbuf - zreco.avail_out)) {
+                fprintf (stderr, "ftbackup: write(%s) error: %s\n", opt_record, mystrerr (errno));
+                exit (EX_SSIO);
+            }
+            zreco.next_out  = recozbuf;
+            zreco.avail_out = sizeof recozbuf;
+        }
+    }
 }
 
 /**
@@ -1713,8 +1756,7 @@ void FTBWriter::hash_block (Block *block)
  */
 void FTBWriter::write_ssblock (Block *block)
 {
-    int rc;
-    uint32_t bs, ofs;
+    uint32_t bs;
 
     if ((opt_segsize > 0) && (byteswrittentoseg >= opt_segsize)) {
         if (close (ssfd) < 0) {
@@ -1730,13 +1772,10 @@ void FTBWriter::write_ssblock (Block *block)
         byteswrittentoseg = 0;
     }
 
-    bs = 1 << l2bs;
-    for (ofs = 0; ofs < bs; ofs += rc) {
-        rc = write (ssfd, ((uint8_t *)block) + ofs, bs - ofs);
-        if (rc <= 0) {
-            fprintf (stderr, "ftbackup: write() saveset error: %s\n", (rc == 0) ? "end of file" : mystrerr (errno));
-            exit (EX_SSIO);
-        }
+    bs = 1U << l2bs;
+    if (!writeall (ssfd, (uint8_t const *) block, bs)) {
+        fprintf (stderr, "ftbackup: write() saveset error: %s\n", mystrerr (errno));
+        exit (EX_SSIO);
     }
     byteswrittentoseg += bs;
 }
@@ -1814,6 +1853,22 @@ T SlotQueue<T>::dequeue ()
     return slot;
 }
 
+static bool writeall (int fd, uint8_t const *buf, int len)
+{
+    int rc;
+
+    while (len > 0) {
+        rc = write (fd, buf, len);
+        if (rc <= 0) {
+            if (rc == 0) errno = MYENDOFILE;
+            return false;
+        }
+        buf += rc;
+        len -= rc;
+    }
+    return true;
+}
+
 static uint64_t getruntime ()
 {
     int rc;

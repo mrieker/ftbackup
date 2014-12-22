@@ -73,14 +73,13 @@ private:
     Block **xorblocks;
     bool zisopen;
     char const *ssbasename;
-    char *reconamebuf;
     char *sincpathb;
     char *sssegname;
     dev_t inodesdevno;
     FILE *noncefile;
-    FILE *recofile;
-    FILE *sincfile;
     ino_t *inodeslist;
+    int recofd;
+    int sincfd;
     int ssfd;
     SkipName *skipnames;
     time_t lastverbsec;
@@ -96,6 +95,8 @@ private:
     uint64_t *inodesmtim;
     uint64_t rft_runtime;
     uint64_t sincctime;
+    z_stream zreco;
+    z_stream zsinc;
     z_stream zstrm;
 
     SlotQueue<void *>    frbufqueue;  // free buffers for reading files
@@ -104,8 +105,10 @@ private:
     SlotQueue<HistSlot>  histqueue;   // filenames to be written to history
     SlotQueue<Block *>   writequeue;  // blocks to be written to saveset
 
-    bool skipbysince (Header const *hdr);
-    void maybe_record_file (uint64_t ctime, char const *name);
+    uint8_t recozbuf[4096];
+    uint8_t sincxbuf[4096];
+    uint8_t sinczbuf[4096];
+
     bool write_file (char const *path, struct stat const *dirstat);
     bool write_regular (Header *hdr, struct stat const *dirstat);
     bool write_directory (Header *hdr, struct stat const *statbuf);
@@ -113,6 +116,10 @@ private:
     bool write_symlink (Header *hdr);
     bool write_special (Header *hdr, dev_t strdev);
     void write_header (Header *hdr);
+    bool skipbysince (Header const *hdr);
+    bool read_sinc_data (void *buf, uint32_t len);
+    void maybe_record_file (uint64_t ctime, char const *name);
+    void write_reco_data (void const *buf, uint32_t len);
     void write_raw (void const *buf, uint32_t len, bool hdr);
     void write_queue (void *buf, uint32_t len, int dty);
     static void *compr_thread_wrapper (void *ftbw);
