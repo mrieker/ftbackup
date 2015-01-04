@@ -33,7 +33,115 @@ static bool writeall (int fd, uint8_t const *buf, int len);
 static uint64_t getruntime ();
 static void printthreadcputime (char const *name);
 static void printthreadruntime (char const *name, uint64_t runtime);
+
+SinceReader::SinceReader ()
+{
+    ctime     = 0;
+    fname     = NULL;
+    sincfd    = -1;
+    sincpaths = 0;
+    memset (&zsinc, 0, sizeof zsinc);
+}
 
+SinceReader::~SinceReader ()
+{
+    free (fname);
+    close ();
+}
+
+bool SinceReader::open (char const *name)
+{
+    int rc;
+
+    sincname = name;
+    sincfd   = ::open (name, O_RDONLY);
+    if (sincfd < 0) {
+        fprintf (stderr, "ftbackup: open(%s) error: %s\n", name, mystrerr (errno));
+        return false;
+    }
+    rc = inflateInit (&zsinc);
+    if (rc != Z_OK) INTERR (inflateInit, rc);
+    return true;
+}
+
+bool SinceReader::read ()
+{
+    uint32_t i;
+
+    if (!rdraw (&ctime, sizeof ctime)) return false;
+    i = 0;
+    do {
+        if (sincpaths <= i) {
+            sincpaths = i + 256;
+            fname = (char *) realloc (fname, sincpaths);
+            if (fname == NULL) NOMEM ();
+        }
+        if (!rdraw (&fname[i], sizeof fname[i])) return false;
+    } while (fname[i++] != 0);
+    return true;
+}
+
+void SinceReader::close ()
+{
+    if (sincfd >= 0) {
+        ::close (sincfd);
+        inflateEnd (&zsinc);
+        sincfd = -1;
+    }
+}
+
+bool SinceReader::rdraw (void *buf, uint32_t len)
+{
+    int rc;
+    uint32_t got;
+
+    while (len > 0) {
+
+        /*
+         * See if any expanded data available.
+         */
+        while ((got = zsinc.avail_out) == 0) {
+
+            /*
+             * See if any compressed data in buffer.
+             * If not, fill the compressed data buffer from file.
+             */
+            if (zsinc.avail_in == 0) {
+                rc = ::read (sincfd, sinczbuf, sizeof sinczbuf);
+                if (rc < 0) {
+                    fprintf (stderr, "ftbackup: read(%s) error: %s\n", sincname, mystrerr (errno));
+                    return false;
+                }
+                if (rc == 0) return false;
+                zsinc.next_in  = sinczbuf;
+                zsinc.avail_in = rc;
+            }
+
+            /*
+             * Expand a chunk of compressed data.
+             */
+            zsinc.next_out  = sincxbuf;
+            zsinc.avail_out = sizeof sincxbuf;
+            rc = inflate (&zsinc, Z_SYNC_FLUSH);
+            if (rc == Z_STREAM_END) lseek (sincfd, 0, SEEK_END);
+            else if (rc != Z_OK) INTERR (inflate, rc);
+            zsinc.next_out  = sincxbuf;
+            zsinc.avail_out = sizeof sincxbuf - zsinc.avail_out;
+        }
+
+        /*
+         * Expanded data available, copy as much as we need.
+         */
+        if (got > len) got = len;
+        memcpy (buf, zsinc.next_out, got);
+        zsinc.next_out  += got;
+        zsinc.avail_out -= got;
+        buf  = (void *)((ulong_t)buf + got);
+        len -= got;
+    }
+    return true;
+}
+
 FTBWriter::FTBWriter ()
 {
     opt_verbose    = 0;
@@ -49,13 +157,11 @@ FTBWriter::FTBWriter ()
     xorblocks      = NULL;
     zisopen        = false;
     ssbasename     = NULL;
-    sincpathb      = NULL;
     sssegname      = NULL;
     inodesdevno    = 0;
     noncefile      = NULL;
     inodeslist     = NULL;
     recofd         = -1;
-    sincfd         = -1;
     ssfd           = -1;
     skipnames      = NULL;
     lastverbsec    = 0;
@@ -65,12 +171,10 @@ FTBWriter::FTBWriter ()
     lastseqno      = 0;
     lastxorno      = 0;
     reconamelen    = 0;
-    sincpaths      = 0;
     thissegno      = 0;
     byteswrittentoseg = 0;
     inodesmtim     = NULL;
     memset (&zreco, 0, sizeof zreco);
-    memset (&zsinc, 0, sizeof zsinc);
     memset (&zstrm, 0, sizeof zstrm);
 
     frbufqueue = SlotQueue<void *> ();
@@ -95,20 +199,12 @@ FTBWriter::~FTBWriter ()
         free (xorblocks);
     }
 
-    if (sincpathb != NULL) {
-        free (sincpathb);
-    }
-
     if (noncefile != NULL) {
         fclose (noncefile);
     }
 
     if (recofd >= 0) {
         close (recofd);
-    }
-
-    if (sincfd >= 0) {
-        close (sincfd);
     }
 
     if (inodeslist != NULL) {
@@ -169,14 +265,8 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     /*
      * Open record and since files if any.
      */
-    if (opt_since != NULL) {
-        sincfd = open (opt_since, O_RDONLY);
-        if (sincfd < 0) {
-            fprintf (stderr, "ftbackup: fopen(%s) error: %s\n", opt_since, mystrerr (errno));
-            return EX_SSIO;
-        }
-        rc = inflateInit (&zsinc);
-        if (rc != Z_OK) INTERR (inflateInit, rc);
+    if ((opt_since != NULL) && !sincrdr.open (opt_since)) {
+        return EX_SSIO;
     }
 
     if (opt_record != NULL) {
@@ -291,11 +381,7 @@ int FTBWriter::write_saveset (char const *ssname, char const *rootpath)
     /*
      * Close record and since files too.
      */
-    if (sincfd >= 0) {
-        inflateEnd (&zsinc);
-        close (sincfd);
-        sincfd = -1;
-    }
+    if (opt_since != NULL) sincrdr.close ();
 
     if (recofd >= 0) {
         do {
@@ -910,86 +996,24 @@ void FTBWriter::write_header (Header *hdr)
 bool FTBWriter::skipbysince (Header const *hdr)
 {
     int rc;
-    uint32_t i;
 
-    if (sincfd < 0) return false;
+    if (opt_since == NULL) return false;
 
     /*
      * Read records in since file until we get a path that is .ge. this file's path.
      */
-    while ((sincpathb == NULL) || ((rc = pathcmp (sincpathb, hdr->name)) < 0)) {
-        if (!read_sinc_data (&sincctime, sizeof sincctime)) return false;
-        i = 0;
-        do {
-            if (sincpaths <= i) {
-                sincpaths = i + 256;
-                sincpathb = (char *) realloc (sincpathb, sincpaths);
-                if (sincpathb == NULL) NOMEM ();
-            }
-            if (!read_sinc_data (&sincpathb[i], sizeof sincpathb[i])) return false;
-        } while (sincpathb[i++] != 0);
+    while ((sincrdr.fname == NULL) || ((rc = pathcmp (sincrdr.fname, hdr->name)) < 0)) {
+        if (!sincrdr.read ()) return false;
     }
 
     /*
      * If this exact file is in since file without changes, skip it.
      */
-    if ((rc == 0) && (hdr->ctimns == sincctime)) {
-        maybe_record_file (sincctime, sincpathb);
+    if ((rc == 0) && (hdr->ctimns == sincrdr.ctime)) {
+        maybe_record_file (sincrdr.ctime, sincrdr.fname);
         return true;
     }
     return false;
-}
-
-bool FTBWriter::read_sinc_data (void *buf, uint32_t len)
-{
-    int rc;
-    uint32_t got;
-
-    while (len > 0) {
-
-        /*
-         * See if any expanded data available.
-         */
-        while ((got = zsinc.avail_out) == 0) {
-
-            /*
-             * See if any compressed data in buffer.
-             * If not, fill the compressed data buffer from file.
-             */
-            if (zsinc.avail_in == 0) {
-                rc = read (sincfd, sinczbuf, sizeof sinczbuf);
-                if (rc < 0) {
-                    fprintf (stderr, "ftbackup: read(%s) error: %s\n", opt_since, mystrerr (errno));
-                    return false;
-                }
-                if (rc == 0) return false;
-                zsinc.next_in  = sinczbuf;
-                zsinc.avail_in = rc;
-            }
-
-            /*
-             * Expand a chunk of compressed data.
-             */
-            zsinc.next_out  = sincxbuf;
-            zsinc.avail_out = sizeof sincxbuf;
-            rc = inflate (&zsinc, Z_SYNC_FLUSH);
-            if (rc == Z_STREAM_END) lseek (sincfd, 0, SEEK_END);
-            else if (rc != Z_OK) INTERR (inflate, rc);
-            zsinc.next_out  = sincxbuf;
-            zsinc.avail_out = sizeof sincxbuf - zsinc.avail_out;
-        }
-
-        /*
-         * Expanded data available, copy as much as we need.
-         */
-        if (got > len) got = len;
-        memcpy (buf, zsinc.next_out, got);
-        zsinc.next_out  += got;
-        zsinc.avail_out -= got;
-        buf  = (void *)((ulong_t)buf + got);
-        len -= got;
-    }
-    return true;
 }
 
 /**

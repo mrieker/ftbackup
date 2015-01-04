@@ -38,6 +38,29 @@ private:
     uint32_t used;
 };
 
+struct SinceReader {
+    uint64_t ctime;
+    char *fname;
+
+    SinceReader ();
+    ~SinceReader ();
+
+    bool open (char const *name);
+    bool read ();
+    void close ();
+
+private:
+    char const *sincname;
+    int sincfd;
+    uint32_t sincpaths;
+    z_stream zsinc;
+
+    uint8_t sincxbuf[4096];
+    uint8_t sinczbuf[4096];
+
+    bool rdraw (void *buf, uint32_t len);
+};
+
 struct FTBWriter : FTBackup {
     bool opt_verbose;
     char const *histdbname;
@@ -73,14 +96,13 @@ private:
     Block **xorblocks;
     bool zisopen;
     char const *ssbasename;
-    char *sincpathb;
     char *sssegname;
     dev_t inodesdevno;
     FILE *noncefile;
     ino_t *inodeslist;
     int recofd;
-    int sincfd;
     int ssfd;
+    SinceReader sincrdr;
     SkipName *skipnames;
     time_t lastverbsec;
     uint32_t inodessize;
@@ -89,14 +111,11 @@ private:
     uint32_t lastseqno;
     uint32_t lastxorno;
     uint32_t reconamelen;
-    uint32_t sincpaths;
     uint32_t thissegno;
     uint64_t byteswrittentoseg;
     uint64_t *inodesmtim;
     uint64_t rft_runtime;
-    uint64_t sincctime;
     z_stream zreco;
-    z_stream zsinc;
     z_stream zstrm;
 
     SlotQueue<void *>    frbufqueue;  // free buffers for reading files
@@ -106,8 +125,6 @@ private:
     SlotQueue<Block *>   writequeue;  // blocks to be written to saveset
 
     uint8_t recozbuf[4096];
-    uint8_t sincxbuf[4096];
-    uint8_t sinczbuf[4096];
 
     bool write_file (char const *path, struct stat const *dirstat);
     bool write_regular (Header *hdr, struct stat const *dirstat);
@@ -117,7 +134,6 @@ private:
     bool write_special (Header *hdr, dev_t strdev);
     void write_header (Header *hdr);
     bool skipbysince (Header const *hdr);
-    bool read_sinc_data (void *buf, uint32_t len);
     void maybe_record_file (uint64_t ctime, char const *name);
     void write_reco_data (void const *buf, uint32_t len);
     void write_raw (void const *buf, uint32_t len, bool hdr);

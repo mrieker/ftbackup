@@ -51,7 +51,7 @@ static bool issocket (char const *path, char const *file);
 static bool ismountpointoremptydir (char const *name);
 static bool diff_symlink (char const *path1, char const *path2);
 static bool diff_special (char const *path1, char const *path2, struct stat *stat1, struct stat *stat2);
-
+static int cmd_dumprecord (int argc, char **argv);
 static int cmd_help (int argc, char **argv);
 static char *afgetln (FILE *file);
 static int cmd_history (int argc, char **argv);
@@ -99,7 +99,7 @@ struct CompFSAccess : IFSAccess {
     virtual int fslink (char const *oldname, char const *newname);
     virtual int fssymlink (char const *oldname, char const *newname);
     virtual int fsreadlink (char const *name, char *buf, int len) { errno = ENOSYS; return -1; }
-    virtual int fsscandir (char const *dirname, struct dirent ***names, 
+    virtual int fsscandir (char const *dirname, struct dirent ***names,
             int (*filter)(const struct dirent *),
             int (*compar)(const struct dirent **, const struct dirent **)) {
         errno = ENOSYS; return -1;
@@ -307,7 +307,7 @@ struct FullFSAccess : IFSAccess {
     virtual int fslink (char const *oldname, char const *newname) { return link (oldname, newname); }
     virtual int fssymlink (char const *oldname, char const *newname) { return symlink (oldname, newname); }
     virtual int fsreadlink (char const *name, char *buf, int len) { return readlink (name, buf, len); }
-    virtual int fsscandir (char const *dirname, struct dirent ***names, 
+    virtual int fsscandir (char const *dirname, struct dirent ***names,
             int (*filter)(const struct dirent *),
             int (*compar)(const struct dirent **, const struct dirent **)) {
         return scandir (dirname, names, filter, compar);
@@ -348,7 +348,7 @@ struct NullFSAccess : IFSAccess {
     virtual int fslink (char const *oldname, char const *newname) { errno = ENOSYS; return -1; }
     virtual int fssymlink (char const *oldname, char const *newname) { errno = ENOSYS; return -1; }
     virtual int fsreadlink (char const *name, char *buf, int len) { errno = ENOSYS; return -1; }
-    virtual int fsscandir (char const *dirname, struct dirent ***names, 
+    virtual int fsscandir (char const *dirname, struct dirent ***names,
             int (*filter)(const struct dirent *),
             int (*compar)(const struct dirent **, const struct dirent **)) { errno = ENOSYS; return -1; }
     virtual int fsmkdir (char const *dirname, mode_t mode) { errno = ENOSYS; return -1; }
@@ -370,21 +370,23 @@ int main (int argc, char **argv)
     setlinebuf (stderr);
 
     if (argc >= 2) {
-        if (strcasecmp (argv[1], "backup")  == 0) return cmd_backup  (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "compare") == 0) return cmd_restore (argc - 1, argv + 1, &compFSAccess);
-        if (strcasecmp (argv[1], "diff")    == 0) return cmd_diff    (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "help")    == 0) return cmd_help    (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "history") == 0) return cmd_history (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "license") == 0) return cmd_license (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "list")    == 0) return cmd_list    (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "restore") == 0) return cmd_restore (argc - 1, argv + 1, &fullFSAccess);
-        if (strcasecmp (argv[1], "version") == 0) return cmd_version (argc - 1, argv + 1);
-        if (strcasecmp (argv[1], "xorvfy")  == 0) return cmd_xorvfy  (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "backup")     == 0) return cmd_backup     (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "compare")    == 0) return cmd_restore    (argc - 1, argv + 1, &compFSAccess);
+        if (strcasecmp (argv[1], "diff")       == 0) return cmd_diff       (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "dumprecord") == 0) return cmd_dumprecord (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "help")       == 0) return cmd_help       (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "history")    == 0) return cmd_history    (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "license")    == 0) return cmd_license    (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "list")       == 0) return cmd_list       (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "restore")    == 0) return cmd_restore    (argc - 1, argv + 1, &fullFSAccess);
+        if (strcasecmp (argv[1], "version")    == 0) return cmd_version    (argc - 1, argv + 1);
+        if (strcasecmp (argv[1], "xorvfy")     == 0) return cmd_xorvfy     (argc - 1, argv + 1);
         fprintf (stderr, "ftbackup: unknown command %s\n", argv[1]);
     }
     fprintf (stderr, "usage: ftbackup backup ...\n");
     fprintf (stderr, "       ftbackup compare ...\n");
     fprintf (stderr, "       ftbackup diff ...\n");
+    fprintf (stderr, "       ftbackup dumprecord ...\n");
     fprintf (stderr, "       ftbackup help\n");
     fprintf (stderr, "       ftbackup history ...\n");
     fprintf (stderr, "       ftbackup license\n");
@@ -856,7 +858,7 @@ static bool diff_regular (char const *path1, char const *path2)
             break;
         }
         if (rc1 != rc2) {
-            printf ("\ndiff regular length mismatch\n  %*s  %12llu\n  %*s  %12llu\n", 
+            printf ("\ndiff regular length mismatch\n  %*s  %12llu\n  %*s  %12llu\n",
                     len, path1, ofs + rc1,
                     len, path2, ofs + rc2);
             err = true;
@@ -1092,6 +1094,35 @@ static bool diff_special (char const *path1, char const *path2, struct stat *sta
         return true;
     }
     return false;
+}
+
+/**
+ * @brief Dump contents of a backup -record file.
+ */
+static int cmd_dumprecord (int argc, char **argv)
+{
+    SinceReader sincrdr;
+    struct tm lcl;
+    time_t sec;
+
+    if (argc != 2) goto usage;
+
+    if (!sincrdr.open (argv[1])) {
+        return EX_SSIO;
+    }
+    while (sincrdr.read ()) {
+        sec = sincrdr.ctime / 1000000000;
+        lcl = *localtime (&sec);
+        printf ("%04d-%02d-%02d %02d:%02d:%02d.%09lld  %s\n",
+                lcl.tm_year + 1900, lcl.tm_mon + 1, lcl.tm_mday, lcl.tm_hour, lcl.tm_min, lcl.tm_sec,
+                sincrdr.ctime % 1000000000, sincrdr.fname);
+    }
+    sincrdr.close ();
+    return 0;
+
+usage:
+    fprintf (stderr, "usage: ftbackup dumprecord <recordfile>\n");
+    return EX_CMD;
 }
 
 /**
