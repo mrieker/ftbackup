@@ -75,7 +75,7 @@
                         hash will be written to each block as a data integrity
                         check.
                     <LI><B>-history [::<I>histss</I>] <I>histdb</I></B> : write
-                        saved filenames to an SQLite3 database.
+                        saved filenames to a database.
                         <UL>
                             <LI><B><I>histss</I></B> - name of saveset written
                                 to database (defaults to <I>saveset</I>
@@ -85,7 +85,7 @@
                                 HREF="#history"><B>history</B></A> command.
                                 Thus, it can be any string useful to identify
                                 the saveset.
-                            <LI><B><I>histdb</I></B> - SQLite3 database file.
+                            <LI><B><I>histdb</I></B> - database file.
                                 This file is created if it does not already
                                 exist, otherwise, the new files and saveset are
                                 added as needed.
@@ -181,7 +181,7 @@
                         <TT>SHA1</TT> with the key given in file
                         <TT>backup.key</TT>.
                     <LI>Each filename as it is backed up is written to
-                        <TT>/var/log/root_disk.hist</TT> SQLite3 database
+                        <TT>/var/log/root_disk.hist</TT> database
                     <LI>Record the date/time the backup was started in
                         <TT>/var/log/root_disk.reco</TT> so that an incremental
                         backup can be done later using <TT>-since
@@ -260,7 +260,7 @@
                         consider savesets created since the indicated UTC
                         date/time
                 </UL>
-            <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
+            <LI><B><I>histdb</I></B> - name of database file given to
                 -history option on <A HREF="#backup"><B>backup</B></A> command
                 line
             <LI><B><I>wildcard</I></B> - <A HREF="#wildcard">wildcard</A> to 
@@ -278,17 +278,11 @@
                         consider savesets created since the indicated UTC
                         date/time
                 </UL>
-            <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
+            <LI><B><I>histdb</I></B> - name of database file given to
                 -history option on <A HREF="#backup"><B>backup</B></A> command
                 line
             <LI><B><I>wildcard</I></B> - <A HREF="#wildcard">wildcard</A> of 
                 savesets to delete
-        </UL>
-        Note:
-        <UL>
-            <LI>The shell <B><TT>sqlite3</TT></B> command can be used to manage
-                the <B><I>histdb</I></B> database if needed beyond what is
-                given here.
         </UL>
         <H3>ftbackup history -listss <I>options</I> <I>histdb</I>
             [<I>wildcard</I> ...]</H3>
@@ -302,7 +296,7 @@
                         consider savesets created since the indicated UTC
                         date/time
                 </UL>
-            <LI><B><I>histdb</I></B> - name of SQLite3 database file given to
+            <LI><B><I>histdb</I></B> - name of database file given to
                 -history option on <A HREF="#backup"><B>backup</B></A> command
                 line
             <LI><B><I>wildcard</I></B> - <A HREF="#wildcard">wildcard</A> of 

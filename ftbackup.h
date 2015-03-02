@@ -23,7 +23,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +36,10 @@
 
 #include "cryptopp562/cryptlib.h"
 
+extern "C" {
+#include "ix/ix.h"
+}
+
 #define PAGESIZE (4096U)
 #define MINBLOCKSIZE PAGESIZE
 #define DEFBLOCKSIZE (32768U)
@@ -45,7 +48,6 @@
 #define FILEIOSIZE (32768U)
 #define DEF_CIPHERNAME "AES"
 #define DEF_HASHERNAME "SHA1"
-#define SQL_TIMEOUT_MS 10000
 #define UNUSED(v) asm volatile ("" : : "g" (v))
 
 #define DEFXORSC 31 // write one XOR block per 31 data blocks
@@ -62,6 +64,10 @@
 
 #define HFL_HDLINK 0x01  // regular file is an hardlink
 #define HFL_XATTRS 0x02  // xattrs follow name
+
+#define DB_FILE_PATH_MAX 1024  // longest filename we can save in history
+#define DB_FILE_SAVE_MAX 1024  // maximum number of savesets per file to save
+#define DB_SAVE_PATH_MAX 1024  // longest saveset filename we can save
 
 #define INTERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error %d\n", err); abort (); } while (0)
 #define NANOTIME(tv) ((tv).tv_sec * 1000000000ULL + (tv).tv_nsec)
@@ -101,6 +107,16 @@ struct Header {
     uint32_t    nameln;     // name and xattr length (incl null)
     uint8_t     flags;      // flag bits
     char        name[0];    // file name (incl null) and xattrs
+};
+
+struct HistFileRec {
+    char path[DB_FILE_PATH_MAX];        // pathname of saved file
+    uint64_t saves[DB_FILE_SAVE_MAX];   // timens_BE of savesets
+};
+
+struct HistSaveRec {
+    uint64_t timens_BE;                 // nanosecond time (big-endian) of saveset
+    char path[DB_SAVE_PATH_MAX];        // pathname of saveset
 };
 
 struct FTBackup {
@@ -166,5 +182,12 @@ char const *mystrerr (int err);
 int wildcardlength (char const *wild);
 bool wildcardchar (char c);
 bool wildcardmatch (char const *wild, char const *name);
+
+static inline uint64_t quadswab (uint64_t q)
+{
+    return ((q >> 56) & 0xFFU) | ((q >> 40) & 0xFF00U) | ((q >> 24) & 0xFF0000U) | ((q >> 8) & 0xFF000000U) |
+           ((q << 8) & 0xFF00000000ULL) | ((q << 24) & 0xFF0000000000ULL) | ((q << 40) & 0xFF000000000000ULL) |
+           ((q << 56) & 0xFF00000000000000ULL);
+}
 
 #endif

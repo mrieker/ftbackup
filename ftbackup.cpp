@@ -548,7 +548,7 @@ usage:
     fprintf (stderr, "                            default is %u\n", DEFBLOCKSIZE);
     usagecipherargs ("encrypt");
     fprintf (stderr, "    -history [::<histss>] <histdb>\n");
-    fprintf (stderr, "                          add filenames saved to SQLite database\n");
+    fprintf (stderr, "                          add filenames saved to database\n");
     fprintf (stderr, "    -idirect              use O_DIRECT when reading files\n");
     fprintf (stderr, "    -noxor                don't write any recovery blocks\n");
     fprintf (stderr, "                            default is to write recovery blocks\n");
@@ -1400,158 +1400,169 @@ static bool sanitizedatestr (char *outstr, char const *instr)
  */
 static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards, bool del)
 {
-    char const *fieldname, *name, *time, *wildcard;
-    char delinsts[60], numstr[12];
-    char **queryparams;
-    char *wildcardend;
-    int i, nqueryparams, rc, savesel_ssid, savesel_name, savesel_time, wildcardlen;
-    sqlite3 *histdb;
-    sqlite3_int64 ssid;
-    sqlite3_stmt *savesel;
-    std::string querystr;
+    char const *name, *wildcard;
+    char time[20];
+    HistFileRec filebuf;
+    HistSaveRec savebuf;
+    int i, j, wildcardlen;
+    IX_Rsz filelen, savelen;
+    IX_uLong sts;
+    time_t timesc;
+    uint64_t timens;
+    void *rabfiles, *rabsaves;
+    struct tm timetm;
+
+    struct SaveKey {
+        SaveKey *next;
+        uint64_t key;
+    };
+
+    SaveKey *key, *keys;
 
     /*
      * Open given database.
      */
     if (histdbname == NULL) return EX_CMD;
-    rc = sqlite3_open_v2 (histdbname, &histdb, del ? SQLITE_OPEN_READWRITE : SQLITE_OPEN_READONLY, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_open(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
+    char *histdbname_files = (char *) alloca (strlen (histdbname) + 7);
+    sprintf (histdbname_files, "%s.files", histdbname);
+    sts = ix_open_file2 (histdbname_files, !del, 10, &rabfiles, IX_SHARE_W, 0, NULL);
+    if (sts != IX_SUCCESS) {
+        fprintf (stderr, "ftbackup: ix_open_file(%s) error: %s\n", histdbname_files, ix_errlist (sts));
+        exit (EX_HIST);
+    }
+    char *histdbname_saves = (char *) alloca (strlen (histdbname) + 7);
+    sprintf (histdbname_saves, "%s.saves", histdbname);
+    sts = ix_open_file2 (histdbname_saves, !del, 10, &rabsaves, IX_SHARE_W, 0, NULL);
+    if (sts != IX_SUCCESS) {
+        fprintf (stderr, "ftbackup: ix_open_file(%s) error: %s\n", histdbname_saves, ix_errlist (sts));
         exit (EX_HIST);
     }
 
-    rc = sqlite3_busy_timeout (histdb, SQL_TIMEOUT_MS);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite_busy_timeout(%s, %d) error: %s\n", histdbname, SQL_TIMEOUT_MS, sqlite3_errmsg (histdb));
-    }
-
     /*
-     * Pre-compile select statement that selects the files based on given wildcards.
+     * Scan through each given wildcard.
      */
-    querystr     = "SELECT ssid,name,time FROM savesets";
-    queryparams  = (char **) alloca (nwildcards * 2 * sizeof *queryparams);
-    nqueryparams = 0;
-
+    keys = NULL;
     for (i = 0; i < nwildcards; i ++) {
 
         /*
          * Get wildcard from command line.
-         * If fixed part on the beginning is null, eg, '*.x',
-         * then use query to select all files.
+         * Get portion used for start of key.
          */
         wildcard = wildcards[i];
         wildcardlen = wildcardlength (wildcard);
-        if (wildcardlen == 0) {
-            querystr = "SELECT ssid,name,time FROM savesets";
-            nqueryparams = 0;
-            break;
-        }
 
         /*
-         * Fixed part non-null, eg, 'a' from 'a*', make it a range to select,
-         * eg, 'a*' => BETWEEN 'a' AND 'b'.
+         * Find first possible match for the wildcard.
          */
-        queryparams[nqueryparams] = strdup (wildcard);
-        queryparams[nqueryparams][wildcardlen] = 0;
-        if (nqueryparams == 0) {
-            querystr += " WHERE";
+        if (wildcardlen > 0) {
+            sts = ix_search_key (rabsaves, IX_SEARCH_GEF, 1, wildcardlen, (IX_Rbf const *) wildcard,
+                                 sizeof savebuf, (IX_Rbf *) &savebuf, &savelen);
         } else {
-            querystr += " OR";
+            sts = ix_rewind (rabsaves, 1);
+            if (sts != IX_SUCCESS) {
+                fprintf (stderr, "ftbackup: ix_rewind(%s) error: %s\n", histdbname_saves, ix_errlist (sts));
+                exit (EX_HIST);
+            }
+            sts = ix_search_seq (rabsaves, 1, sizeof savebuf, (IX_Rbf *) &savebuf, &savelen, 0, NULL);
         }
 
-        wildcardend = strdup (wildcard);
-        do if (++ wildcardend[wildcardlen-1] != 0) break;
-        while (-- wildcardlen > 0);
-        wildcardend[wildcardlen] = 0;
+        while (sts == IX_SUCCESS) {
+            if ((wildcardlen > 0) && (memcmp (savebuf.path, wildcard, wildcardlen) > 0)) break;
 
-        if (wildcardlen == 0) {
-            querystr += " name >= ?";
-            sprintf (numstr, "%d", ++ nqueryparams);
-            querystr += numstr;
-        } else {
-            querystr += " name BETWEEN ?";
-            sprintf (numstr, "%d", ++ nqueryparams);
-            querystr += numstr;
+            /*
+             * See if it matches time constraint.
+             */
+            timens = quadswab (savebuf.timens_BE);
+            timesc = timens / 1000000000U;
+            timetm = *localtime (&timesc);
+            sprintf (time, "%.4d-%.2d-%.2d %.2d:%.2d:%.2d",
+                        timetm.tm_year + 1900, timetm.tm_mon + 1, timetm.tm_mday,
+                        timetm.tm_hour, timetm.tm_min, timetm.tm_sec);
 
-            queryparams[nqueryparams] = wildcardend;
-            querystr += " AND ?";
-            sprintf (numstr, "%d", ++ nqueryparams);
-            querystr += numstr;
+            /*
+             * See if the saveset matches the wildcard given on the command line.
+             */
+            name = savebuf.path;
+            wildcard = wildcards[i];
+            if (wildcardmatch (wildcards[i], name) && (strcmp (time, sssince) >= 0) && (strcmp (time, ssbefore) < 0)) {
+
+                /*
+                 * If so, print.
+                 */
+                printf ("  %s  %s\n", time, name);
+
+                /*
+                 * Maybe delete the saveset record.
+                 */
+                if (del) {
+                    sts = ix_remove_rec (rabsaves);
+                    if (sts != IX_SUCCESS) {
+                        fprintf (stderr, "ftbackup: ix_remove_rec(%s) error: %s\n", histdbname_saves, ix_errlist (sts));
+                        return EX_HIST;
+                    }
+                    key = (SaveKey *) malloc (sizeof *key);
+                    if (key == NULL) NOMEM ();
+                    key->next = keys;
+                    key->key  = savebuf.timens_BE;
+                    keys = key;
+                }
+            }
+
+            /*
+             * Maybe next saveset record matches wildcard.
+             */
+            sts = ix_search_seq (rabsaves, 1, sizeof savebuf, (IX_Rbf *) &savebuf, &savelen, 0, NULL);
         }
-    }
 
-    querystr += " ORDER BY name";
-
-    rc = sqlite3_prepare_v2 (histdb, querystr.c_str (), -1, &savesel, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM savesets) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
-        exit (EX_HIST);
-    }
-
-    for (i = 0; i < nqueryparams; i ++) {
-        rc = sqlite3_bind_text (savesel, i + 1, queryparams[i], -1, free);
-        if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
-    }
-
-    for (savesel_name = 0;; savesel_name ++) {
-        fieldname = sqlite3_column_name (savesel, savesel_name);
-        if (strcmp (fieldname, "name") == 0) break;
-    }
-    for (savesel_ssid = 0;; savesel_ssid ++) {
-        fieldname = sqlite3_column_name (savesel, savesel_ssid);
-        if (strcmp (fieldname, "ssid") == 0) break;
-    }
-    for (savesel_time = 0;; savesel_time ++) {
-        fieldname = sqlite3_column_name (savesel, savesel_time);
-        if (strcmp (fieldname, "time") == 0) break;
+        if ((sts != IX_SUCCESS) && (sts != IX_RECNOTFOUND)) {
+            fprintf (stderr, "ftbackup: ix_search(%s) error: %s\n", histdbname_saves, ix_errlist (sts));
+            return EX_HIST;
+        }
     }
 
     /*
-     * Step through list of savesets.
+     * If any savesets were deleted, clean the files records.
      */
-    while ((rc = sqlite3_step (savesel)) == SQLITE_ROW) {
-        ssid = sqlite3_column_int64 (savesel, savesel_ssid);
-        name = (char const *) sqlite3_column_text (savesel, savesel_name);
-        time = (char const *) sqlite3_column_text (savesel, savesel_time);
-        if (strcmp (time, sssince)  <  0) continue;
-        if (strcmp (time, ssbefore) >= 0) continue;
-
-        /*
-         * See if the saveset matches any of the wildcards given on the command line.
-         */
-        for (i = 0; i < nwildcards; i ++) {
-            wildcard = wildcards[i];
-            if (wildcardmatch (wildcard, name)) break;
-        }
-        if (((nwildcards == 0) && !del) || (i < nwildcards)) {
-            printf ("  %s  %s\n", time, name);
-
-            /*
-             * Maybe delete the saveset record.
-             * Triggers in the database will delete all other referenced records.
-             */
-            if (del) {
-                sprintf (delinsts, "DELETE FROM savesets WHERE ssid=%lld", ssid);
-                rc = sqlite3_exec (histdb, delinsts, NULL, NULL, NULL);
-                if (rc != SQLITE_OK) {
-                    fprintf (stderr, "ftbackup: sqlite3_exec(%s, DELETE FROM savesets) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-                    sqlite3_close (histdb);
-                    return EX_HIST;
+    if (keys != NULL) {
+        while ((sts = ix_search_seq (rabfiles, 0, sizeof filebuf, (IX_Rbf *) &filebuf, &filelen, 0, NULL)) == IX_SUCCESS) {
+            j = 0;
+            for (i = 0; (ulong_t)&filebuf.saves[i+1] <= (ulong_t)&filebuf + filelen; i ++) {
+                for (key = keys; key != NULL; key = key->next) {
+                    if (key->key == filebuf.saves[i]) break;
+                }
+                if (key == NULL) filebuf.saves[j++] = filebuf.saves[i];
+            }
+            if (j < i) {
+                if (j > 0) {
+                    sts = ix_modify_rec (rabfiles, (ulong_t)&filebuf.saves[j] - (ulong_t)&filebuf, (IX_Rbf *)&filebuf);
+                    if (sts != IX_SUCCESS) {
+                        fprintf (stderr, "ftbackup: ix_modify_rec(%s) error: %s\n", histdbname_files, ix_errlist (sts));
+                        return EX_HIST;
+                    }
+                } else {
+                    sts = ix_remove_rec (rabfiles);
+                    if (sts != IX_SUCCESS) {
+                        fprintf (stderr, "ftbackup: ix_remove_rec(%s) error: %s\n", histdbname_files, ix_errlist (sts));
+                        return EX_HIST;
+                    }
                 }
             }
         }
+
+        if (sts != IX_RECNOTFOUND) {
+            fprintf (stderr, "ftbackup: ix_search(%s) error: %s\n", histdbname_files, ix_errlist (sts));
+            return EX_HIST;
+        }
+
+        do {
+            key = keys;
+            keys = key->next;
+            free (key);
+        } while (keys != NULL);
     }
 
-    if (rc != SQLITE_DONE) {
-        fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM savesets) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
-        return EX_HIST;
-    }
-
-    sqlite3_finalize (savesel);
-    sqlite3_close (histdb);
+    ix_close_file (rabfiles);
+    ix_close_file (rabsaves);
 
     return EX_OK;
 }
@@ -1561,189 +1572,81 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
  */
 static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards)
 {
-    bool printed;
-    char const *fieldname, *name, *savename, *savetime, *wildcard;
-    char numstr[12];
-    char **queryparams;
-    char *wildcardend;
-    int filesel_fileid, filesel_name, i, instsel_name, instsel_time;
-    int nqueryparams, rc, wildcardlen;
-    sqlite3 *histdb;
-    sqlite3_int64 fileid;
-    sqlite3_stmt *filesel, *instsel;
-    std::string querystr;
+    char const *name, *wildcard;
+    HistFileRec filebuf;
+    HistSaveRec savebuf;
+    int i, j;
+    int wildcardlen;
+    IX_Rsz filelen, savelen;
+    IX_uLong sts;
+    struct tm timetm;
+    time_t timesc;
+    uint64_t timens;
+    void *rabfiles, *rabsaves;
 
     /*
      * Open given database.
      */
     if (histdbname == NULL) return EX_CMD;
-    rc = sqlite3_open_v2 (histdbname, &histdb, SQLITE_OPEN_READONLY, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_open(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
+    char *histdbname_files = (char *) alloca (strlen (histdbname) + 7);
+    sprintf (histdbname_files, "%s.files", histdbname);
+    sts = ix_open_file2 (histdbname_files, 1, 10, &rabfiles, IX_SHARE_W, 0, NULL);
+    if (sts != IX_SUCCESS) {
+        fprintf (stderr, "ftbackup: ix_open(%s) error: %s\n", histdbname_files, ix_errlist (sts));
+        exit (EX_HIST);
+    }
+    char *histdbname_saves = (char *) alloca (strlen (histdbname) + 7);
+    sprintf (histdbname_saves, "%s.saves", histdbname);
+    sts = ix_open_file2 (histdbname_saves, 1, 10, &rabsaves, IX_SHARE_W, 0, NULL);
+    if (sts != IX_SUCCESS) {
+        fprintf (stderr, "ftbackup: ix_open(%s) error: %s\n", histdbname_saves, ix_errlist (sts));
         exit (EX_HIST);
     }
 
-    rc = sqlite3_busy_timeout (histdb, SQL_TIMEOUT_MS);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite_busy_timeout(%s, %d) error: %s\n", histdbname, SQL_TIMEOUT_MS, sqlite3_errmsg (histdb));
-    }
-
     /*
-     * Pre-compile select statement that selects the files based on given wildcards.
+     * Step through wildcards given on command line.
      */
-    querystr     = "SELECT fileid,name FROM files";
-    queryparams  = (char **) alloca (nwildcards * 2 * sizeof *queryparams);
-    nqueryparams = 0;
-
     for (i = 0; i < nwildcards; i ++) {
-
-        /*
-         * Get wildcard from command line.
-         * If fixed part on the beginning is null, eg, '*.x',
-         * then use query to select all files.
-         */
         wildcard = wildcards[i];
         wildcardlen = wildcardlength (wildcard);
-        if (wildcardlen == 0) {
-            querystr = "SELECT fileid,name FROM files";
-            nqueryparams = 0;
-            break;
-        }
 
-        /*
-         * Fixed part non-null, eg, 'a' from 'a*', make it a range to select,
-         * eg, 'a*' => BETWEEN 'a' AND 'b'.
-         */
-        queryparams[nqueryparams] = strdup (wildcard);
-        queryparams[nqueryparams][wildcardlen] = 0;
-        if (nqueryparams == 0) {
-            querystr += " WHERE";
-        } else {
-            querystr += " OR";
-        }
+        sts = ix_search_key (rabfiles, IX_SEARCH_GEF, 0, wildcardlen, (IX_Rbf const *) wildcard, sizeof filebuf, (IX_Rbf *) &filebuf, &filelen);
 
-        wildcardend = strdup (wildcard);
-        do if (++ wildcardend[wildcardlen-1] != 0) break;
-        while (-- wildcardlen > 0);
-        wildcardend[wildcardlen] = 0;
+        while (sts == IX_SUCCESS) {
+            name = filebuf.path;
+            if ((wildcardlen > 0) && (memcmp (name, wildcard, wildcardlen) > 0)) break;
+            if (wildcardmatch (wildcard, name)) {
+                printf ("\n%s\n", name);
 
-        if (wildcardlen == 0) {
-            querystr += " name >= ?";
-            sprintf (numstr, "%d", ++ nqueryparams);
-            querystr += numstr;
-        } else {
-            querystr += " name BETWEEN ?";
-            sprintf (numstr, "%d", ++ nqueryparams);
-            querystr += numstr;
-
-            queryparams[nqueryparams] = wildcardend;
-            querystr += " AND ?";
-            sprintf (numstr, "%d", ++ nqueryparams);
-            querystr += numstr;
-        }
-    }
-
-    querystr += " ORDER BY name";
-
-    rc = sqlite3_prepare_v2 (histdb, querystr.c_str (), -1, &filesel, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
-        exit (EX_HIST);
-    }
-
-    for (i = 0; i < nqueryparams; i ++) {
-        rc = sqlite3_bind_text (filesel, i + 1, queryparams[i], -1, free);
-        if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
-    }
-
-    for (filesel_fileid = 0;; filesel_fileid ++) {
-        fieldname = sqlite3_column_name (filesel, filesel_fileid);
-        if (strcmp (fieldname, "fileid") == 0) break;
-    }
-    for (filesel_name = 0;; filesel_name ++) {
-        fieldname = sqlite3_column_name (filesel, filesel_name);
-        if (strcmp (fieldname, "name") == 0) break;
-    }
-
-    /*
-     * Pre-compile select statement that selects savesets for a file.
-     */
-    rc = sqlite3_prepare_v2 (histdb,
-        "SELECT name,time FROM instances,savesets WHERE instances.fileid=?1 AND savesets.ssid=instances.ssid ORDER BY time DESC",
-        -1, &instsel, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
-        exit (EX_HIST);
-    }
-    for (instsel_name = 0;; instsel_name ++) {
-        fieldname = sqlite3_column_name (instsel, instsel_name);
-        if (strcmp (fieldname, "name") == 0) break;
-    }
-    for (instsel_time = 0;; instsel_time ++) {
-        fieldname = sqlite3_column_name (instsel, instsel_time);
-        if (strcmp (fieldname, "time") == 0) break;
-    }
-
-    /*
-     * Step through list of files.
-     */
-    while ((rc = sqlite3_step (filesel)) == SQLITE_ROW) {
-        fileid = sqlite3_column_int64 (filesel, filesel_fileid);
-        name   = (char const *) sqlite3_column_text (filesel, filesel_name);
-
-        /*
-         * See if the file matches any of the wildcards given on the command line.
-         */
-        for (i = 0; i < nwildcards; i ++) {
-            wildcard = wildcards[i];
-            if (wildcardmatch (wildcard, name)) break;
-        }
-        if ((nwildcards == 0) || (i < nwildcards)) {
-
-            /*
-             * See what savesets the file has been saved to.
-             */
-            sqlite3_reset (instsel);
-            rc = sqlite3_bind_int64 (instsel, 1, fileid);
-            if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
-
-            /*
-             * Print out saveset time and name.
-             */
-            printed = false;
-            while ((rc = sqlite3_step (instsel)) == SQLITE_ROW) {
-                savetime = (char const *) sqlite3_column_text  (instsel, instsel_time);
-                savename = (char const *) sqlite3_column_text  (instsel, instsel_name);
-                if (strcmp (savetime, sssince)  <  0) continue;
-                if (strcmp (savetime, ssbefore) >= 0) continue;
-
-                if (!printed) {
-                    printf ("\n%s\n", name);
-                    printed = true;
+                /*
+                 * Print out savesets' time and name.
+                 */
+                for (j = 0; (ulong_t)&filebuf.saves[j+1] <= (ulong_t)&filebuf + filelen; j ++) {
+                    sts = ix_search_key (rabsaves, IX_SEARCH_EQF, 0, sizeof filebuf.saves[j], (IX_Rbf *)&filebuf.saves[j], sizeof savebuf, (IX_Rbf *)&savebuf, &savelen);
+                    if (sts == IX_SUCCESS) {
+                        timens = quadswab (savebuf.timens_BE);
+                        timesc = timens / 1000000000U;
+                        timetm = *localtime (&timesc);
+                        printf ("  %.4d-%.2d-%.2d %.2d:%.2d:%.2d  %s\n", 
+                                timetm.tm_year + 1900, timetm.tm_mon + 1, timetm.tm_mday,
+                                timetm.tm_hour, timetm.tm_min, timetm.tm_sec,
+                                savebuf.path);
+                    }
                 }
-                printf ("  %s  %s\n", savetime, savename);
             }
 
-            if (rc != SQLITE_DONE) {
-                fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-                sqlite3_close (histdb);
-                return EX_HIST;
-            }
+            sts = ix_search_seq (rabfiles, 1, sizeof filebuf, (IX_Rbf *)&filebuf, &filelen, 0, NULL);
+        }
+
+        if ((sts != IX_RECNOTFOUND) && (sts != IX_SUCCESS)) {
+            fprintf (stderr, "ftbackup: ix_search(%s) error: %s\n", histdbname_files, ix_errlist (sts));
+            return EX_HIST;
         }
     }
 
-    if (rc != SQLITE_DONE) {
-        fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
-        return EX_HIST;
-    }
+    ix_close_file (rabfiles);
+    ix_close_file (rabsaves);
 
-    sqlite3_finalize (filesel);
-    sqlite3_finalize (instsel);
-    sqlite3_close (histdb);
     return EX_OK;
 }
 

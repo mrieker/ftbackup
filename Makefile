@@ -1,7 +1,5 @@
 
 CFLAGS   ?= -Wall -Werror -O2
-SQLITEAM ?= sqlite-amalgamation-3080702
-SQLITEYR ?= 2014
 STATIC   ?=
 
 #
@@ -47,12 +45,10 @@ DISTFILES := \
 #  Make list of source files that go into executable
 #
 LIBFILES := -lpthread -lrt -lz -lstdc++ -lm
-SRCFILES := ftbackup.cpp ftbreader.cpp ftbwriter.cpp cryptopp562/libcryptopp.a
+SRCFILES := ftbackup.cpp ftbreader.cpp ftbwriter.cpp cryptopp562/libcryptopp.a ix/BIN/libix.a
 ifeq ($(STATIC),)
-    LIBFILES := $(LIBFILES) -lsqlite3
 else
-    CFLAGS   := $(CFLAGS) -static
-    SRCFILES := $(SRCFILES) sqlite3.o
+    CFLAGS := $(CFLAGS) -static
 endif
 
 #
@@ -72,7 +68,7 @@ clean:
 	rm -rf cryptopp562
 	rm -f  ftbackup
 	rm -rf ftbackup-$(DISTVER)*
-	rm -rf sqlite3.o sqlite-am*
+	rm -rf ix/BIN
 
 #
 #  Build distribution tarball
@@ -104,14 +100,9 @@ cryptopp562/libcryptopp.a: cryptopp562.zip
 	cd cryptopp562 ; $(MAKE) libcryptopp.a
 
 #
-#  Build sqlite3.o for static linking
+#  Compile IX library
 #
-sqlite3.o: $(SQLITEAM)/sqlite3.c
-	cc $(CFLAGS) -c -o sqlite3.o \
-		-DSQLITE_OMIT_LOAD_EXTENSION=1 \
-		$(SQLITEAM)/sqlite3.c
-
-$(SQLITEAM)/sqlite3.c:
-	wget http://www.sqlite.org/$(SQLITEYR)/$(SQLITEAM).zip
-	unzip $(SQLITEAM).zip
+ix/BIN/libix.a:
+	mkdir -p ix/BIN
+	cd ix ; make
 

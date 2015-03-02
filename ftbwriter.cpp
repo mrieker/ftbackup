@@ -1272,161 +1272,82 @@ void *FTBWriter::hist_thread_wrapper (void *ftbw)
 }
 void *FTBWriter::hist_thread ()
 {
-    char *sqlerr;
-    char const *fieldname;
+    HistFileRec filebuf;
+    HistSaveRec savebuf;
     HistSlot hs;
-    int filesel_fileid, rc;
-    sqlite3 *histdb;
-    sqlite3_int64 fileid, ssid;
-    sqlite3_stmt *fileins, *filesel, *inststmt, *savestmt;
-    uint64_t flushist, now, wht_runtime;
+    IX_Rsz filelen;
+    IX_uLong sts;
+    struct timeval nowtv;
+    uint64_t wht_runtime;
+    void *filerab, *saverab;
 
     wht_runtime = - getruntime ();
 
     /*
      * Create and/or open database.
      */
-    rc = sqlite3_open_v2 (histdbname, &histdb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_open(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
+    char *histdbname_files = (char *) alloca (strlen (histdbname) + 7);
+    sprintf (histdbname_files, "%s.files", histdbname);
+    sts = ix_open_file2 (histdbname_files, 0, 100, &filerab, IX_SHARE_R, 0, NULL);
+    if (sts == IX_NOSUCHFILE) {
+        static IX_Rsz const ksz[] = { DB_FILE_PATH_MAX };
+        static IX_Rsz const kof[] = {                0 };
+        static IX_Kat const kat[] = {                0 };
+        sts = ix_create_file3 (histdbname_files, 1, ksz, kof, kat, sizeof filebuf * 5,
+                               sizeof filebuf, 100, &filerab, IX_SHARE_R, 0, NULL);
+        if (sts != IX_SUCCESS) {
+            fprintf (stderr, "ftbackup: ix_create_file(%s) error %s\n", histdbname_files, ix_errlist (sts));
+            exit (EX_HIST);
+        }
+    } else if (sts != IX_SUCCESS) {
+        fprintf (stderr, "ftbackup: ix_open_file(%s) error %s\n", histdbname_files, ix_errlist (sts));
         exit (EX_HIST);
     }
 
-    rc = sqlite3_busy_timeout (histdb, SQL_TIMEOUT_MS);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite_busy_timeout(%s, %d) error: %s\n", histdbname, SQL_TIMEOUT_MS, sqlite3_errmsg (histdb));
-    }
-
-    /*
-     * If newly created, create tables and triggers.
-     */
-    rc = sqlite3_exec (histdb,
-        "CREATE TABLE IF NOT EXISTS files (fileid INTEGER PRIMARY KEY AUTOINCREMENT, name NOT NULL UNIQUE);"
-
-        "CREATE TABLE IF NOT EXISTS savesets (ssid INTEGER PRIMARY KEY AUTOINCREMENT, name NOT NULL, time NOT NULL);"
-
-        "CREATE TABLE IF NOT EXISTS instances ("
-            "fileid NOT NULL, "
-            "ssid NOT NULL, "
-            "seqno NOT NULL, "
-            "PRIMARY KEY (fileid, ssid));"
-
-        "CREATE INDEX IF NOT EXISTS idx_file_name ON files (name);"
-        "CREATE INDEX IF NOT EXISTS idx_inst_fileid ON instances (fileid);"
-        "CREATE INDEX IF NOT EXISTS idx_inst_ssid ON instances (ssid);"
-
-        // disallow changing inter-table id numbers to maintain references
-        "CREATE TRIGGER IF NOT EXISTS upd_fileid_block "
-            "BEFORE UPDATE OF fileid ON files "
-            "BEGIN SELECT RAISE(ABORT,'files.fileid immutable'); END;"
-
-        "CREATE TRIGGER IF NOT EXISTS upd_ssid_block "
-            "BEFORE UPDATE OF ssid ON savesets "
-            "BEGIN SELECT RAISE(ABORT,'savesets.ssid immutable'); END;"
-
-        "CREATE TRIGGER IF NOT EXISTS upd_inst_fileid_block "
-            "BEFORE UPDATE OF fileid ON instances "
-            "BEGIN SELECT RAISE(ABORT,'instances.fileid immutable'); END;"
-
-        "CREATE TRIGGER IF NOT EXISTS upd_inst_ssid_block "
-            "BEFORE UPDATE OF ssid ON instances "
-            "BEGIN SELECT RAISE(ABORT,'instances.ssid immutable'); END;"
-
-        // delete associated instance records whenever a file record is deleted
-        "CREATE TRIGGER IF NOT EXISTS del_file_dangling_insts "
-            "AFTER DELETE ON files "
-            "BEGIN DELETE FROM instances WHERE instances.fileid=OLD.fileid; END;"
-
-        // delete associated instance records when a saveset record is deleted
-        "CREATE TRIGGER IF NOT EXISTS del_save_dangling_insts "
-            "AFTER DELETE ON savesets "
-            "BEGIN DELETE FROM instances WHERE instances.ssid=OLD.ssid; END;"
-
-        // delete associated unreferenced file record when an instance record is deleted
-        "CREATE TRIGGER IF NOT EXISTS del_unrefd_files "
-            "AFTER DELETE ON instances "
-            "WHEN NOT EXISTS (SELECT * FROM instances WHERE instances.fileid=OLD.fileid) "
-            "BEGIN DELETE FROM files WHERE files.fileid=OLD.fileid; END",
-
-        NULL, NULL, &sqlerr);
-
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_exec(%s, CREATE TABLE) error: %s\n", histdbname, sqlerr);
-        sqlite3_free (sqlerr);
-        sqlite3_close (histdb);
+    char *histdbname_saves = (char *) alloca (strlen (histdbname) + 7);
+    sprintf (histdbname_saves, "%s.saves", histdbname);
+    sts = ix_open_file2 (histdbname_saves, 0, 10, &saverab, IX_SHARE_R, 0, NULL);
+    if (sts == IX_NOSUCHFILE) {
+        static IX_Rsz const ksz[] = { sizeof (uint64_t),  DB_SAVE_PATH_MAX };
+        static IX_Rsz const kof[] = {                 0, sizeof (uint64_t) };
+        static IX_Kat const kat[] = {                 0,                 0 };
+        sts = ix_create_file3 (histdbname_saves, 2, ksz, kof, kat, (sizeof (uint64_t) + DB_SAVE_PATH_MAX) * 5,
+                               sizeof (uint64_t) + DB_SAVE_PATH_MAX, 10, &saverab, IX_SHARE_R, 0, NULL);
+        if (sts != IX_SUCCESS) {
+            fprintf (stderr, "ftbackup: ix_create_file(%s) error %s\n", histdbname_saves, ix_errlist (sts));
+            exit (EX_HIST);
+        }
+    } else if (sts != IX_SUCCESS) {
+        fprintf (stderr, "ftbackup: ix_open_file(%s) error %s\n", histdbname_saves, ix_errlist (sts));
         exit (EX_HIST);
     }
 
     /*
-     * Write saveset record and get its rowid number.
+     * Write saveset record using an hopefully unique 64-bit number.
      */
-    rc = sqlite3_prepare_v2 (histdb, 
-            "INSERT INTO savesets (name,time) VALUES (?1,CURRENT_TIMESTAMP)", -1, &savestmt, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_prepare(%s) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
-        exit (EX_HIST);
-    }
-    rc = sqlite3_bind_text (savestmt, 1, (histssname == NULL) ? ssbasename : histssname, -1, SQLITE_TRANSIENT);
-    if (rc != SQLITE_OK) INTERR (sqlite3_bind_text, rc);
-    rc = sqlite3_step (savestmt);
-    if (rc != SQLITE_DONE) {
-        fprintf (stderr, "ftbackup: sqlite3_step(%s, INSERT INTO savesets) error: %s\n", histdbname, sqlerr);
-        sqlite3_free (sqlerr);
-        sqlite3_close (histdb);
-        exit (EX_HIST);
-    }
-    sqlite3_finalize (savestmt);
-    ssid = sqlite3_last_insert_rowid (histdb);
+    char const *ssname = (histssname == NULL) ? ssbasename : histssname;
+    uint32_t ssnamelen = strlen (ssname);
+    if (ssnamelen > sizeof savebuf.path - 1) ssnamelen = sizeof savebuf.path - 1;
+    if (gettimeofday (&nowtv, NULL) < 0) abort ();
+    memset (&savebuf, 0, sizeof savebuf);
+    savebuf.timens_BE = quadswab (nowtv.tv_sec * 1000000000ULL + nowtv.tv_usec * 1000U);
+    memcpy (savebuf.path, ssname, ssnamelen);
 
-    /*
-     * Pre-compile SQL statements used in processing loop.
-     */
-    rc = sqlite3_prepare_v2 (histdb, 
-            "SELECT fileid FROM files WHERE name=?1",
-            -1, &filesel, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
-        exit (EX_HIST);
-    }
-    for (filesel_fileid = 0;; filesel_fileid ++) {
-        fieldname = sqlite3_column_name (filesel, filesel_fileid);
-        if (strcmp (fieldname, "fileid") == 0) break;
-    }
-
-    rc = sqlite3_prepare_v2 (histdb, 
-            "INSERT INTO files (name) VALUES (?1)",
-            -1, &fileins, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, INSERT INTO files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
+    sts = ix_insert_rec (saverab, sizeof savebuf, (IX_Rbf *)&savebuf);
+    if (sts != IX_SUCCESS) {
+        fprintf (stderr, "ftbackup: ix_insert(%s) error: %s\n", histdbname_saves, ix_errlist (sts));
         exit (EX_HIST);
     }
 
-    rc = sqlite3_prepare_v2 (histdb, 
-            "INSERT OR IGNORE INTO instances (fileid,ssid,seqno) VALUES (?1,?2,?3)",
-            -1, &inststmt, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_prepare(%s, INSERT INTO instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        sqlite3_close (histdb);
+    sts = ix_close_file (saverab);
+    if (sts != IX_SUCCESS) {
+        fprintf (stderr, "ftbackup: ix_close(%s) error: %s\n", histdbname_saves, ix_errlist (sts));
         exit (EX_HIST);
     }
 
     /*
-     * Lock database for efficiency.
+     * Keep processing incoming names until we get an end marker.
      */
-    rc = sqlite3_exec (histdb, "BEGIN", NULL, NULL, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_exec(%s, BEGIN) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-        exit (EX_HIST);
-    }
-
-    /*
-     * Keep processing incoming names until we get and end marker.
-     */
-    flushist = 0;
     while (true) {
 
         /*
@@ -1439,109 +1360,49 @@ void *FTBWriter::hist_thread ()
 
         /*
          * See if record already exists with the filename.
-         * If so, get the corresponding fileid.
-         * If not, insert new record and get corresponding fileid.
+         * If so, update record to include new saveset.
+         * If not, insert new record with new saveset.
          */
-        sqlite3_reset (filesel);
-        rc = sqlite3_bind_text (filesel, 1, hs.fname, -1, SQLITE_TRANSIENT);
-        if (rc != SQLITE_OK) INTERR (sqlite3_bind_text,  rc);
-        rc = sqlite3_step (filesel);
-        switch (rc) {
-
-            /*
-             * Record already exists, get the fileid.
-             */
-            case SQLITE_ROW: {
-                fileid = sqlite3_column_int64 (filesel, filesel_fileid);
-                break;
-            }
-
-            /*
-             * No such record, insert record then get the fileid.
-             */
-            case SQLITE_DONE: {
-                sqlite3_reset (fileins);
-                rc = sqlite3_bind_text (fileins, 1, hs.fname, -1, SQLITE_TRANSIENT);
-                if (rc != SQLITE_OK) INTERR (sqlite3_bind_text,  rc);
-                rc = sqlite3_step (fileins);
-                if (rc != SQLITE_DONE) {
-                    fprintf (stderr, "ftbackup: sqlite3_step(%s, INSERT INTO files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-                    sqlite3_close (histdb);
-                    exit (EX_HIST);
-                }
-                fileid = sqlite3_last_insert_rowid (histdb);
-                break;
-            }
-
-            /*
-             * Some error.
-             */
-            default: {
-                fprintf (stderr, "ftbackup: sqlite3_step(%s, SELECT FROM files) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-                sqlite3_close (histdb);
+        sts = ix_search_key (filerab, IX_SEARCH_EQF, 0, strlen (hs.fname), (IX_Rbf *)hs.fname, sizeof filebuf, (IX_Rbf *)&filebuf, &filelen);
+        if (sts == IX_RECNOTFOUND) {
+            memset (filebuf.path, 0, sizeof filebuf.path);
+            strncpy (filebuf.path, hs.fname, DB_FILE_PATH_MAX);
+            filebuf.saves[0] = savebuf.timens_BE;
+            sts = ix_insert_rec (filerab, (ulong_t)&filebuf.saves[1] - (ulong_t)&filebuf, (IX_Rbf *)&filebuf);
+            if (sts != IX_SUCCESS) {
+                fprintf (stderr, "ftbackup: ix_insert(%s) error: %s\n", histdbname_files, ix_errlist (sts));
                 exit (EX_HIST);
             }
-        }
-
-        /*
-         * Insert an instance record saying the file is backed up to the saveset.
-         */
-        sqlite3_reset (inststmt);
-
-        rc = sqlite3_bind_int64 (inststmt, 1, fileid);
-        if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
-        rc = sqlite3_bind_int64 (inststmt, 2, ssid);
-        if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
-        rc = sqlite3_bind_int64 (inststmt, 3, (uint64_t) hs.seqno);
-        if (rc != SQLITE_OK) INTERR (sqlite3_bind_int64, rc);
-
-        rc = sqlite3_step (inststmt);
-        if (rc != SQLITE_DONE) {
-            fprintf (stderr, "ftbackup: sqlite3_step(%s, INSERT INTO instances) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-            sqlite3_close (histdb);
+        } else if (sts != IX_SUCCESS) {
+            fprintf (stderr, "ftbackup: ix_search(%s) error: %s\n", histdbname_files, ix_errlist (sts));
             exit (EX_HIST);
+        } else {
+            if (filelen + sizeof filebuf.saves[0] > sizeof filebuf) filelen -= sizeof filebuf.saves[0];
+            memmove (&filebuf.saves[1], &filebuf.saves[0], (ulong_t)&filebuf + filelen - (ulong_t)filebuf.saves);
+            filebuf.saves[0] = savebuf.timens_BE;
+            filelen += sizeof filebuf.saves[0];
+            sts = ix_modify_rec (filerab, filelen, (IX_Rbf *)&filebuf);
+            if (sts != IX_SUCCESS) {
+                fprintf (stderr, "ftbackup: ix_modify(%s) error: %s\n", histdbname_files, ix_errlist (sts));
+                exit (EX_HIST);
+            }
         }
 
         /*
          * Entry all processed.
          */
         free (hs.fname);
-
-        /*
-         * Flush history from time to time so listing will work.
-         */
-        now = getruntime ();
-        if (flushist + (SQL_TIMEOUT_MS * 500000ULL) < now) {
-            rc = sqlite3_exec (histdb, "COMMIT", NULL, NULL, NULL);
-            if (rc != SQLITE_OK) {
-                fprintf (stderr, "ftbackup: sqlite3_exec(%s, COMMIT) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-                exit (EX_HIST);
-            }
-            rc = sqlite3_exec (histdb, "BEGIN", NULL, NULL, NULL);
-            if (rc != SQLITE_OK) {
-                fprintf (stderr, "ftbackup: sqlite3_exec(%s, BEGIN) error: %s\n", histdbname, sqlite3_errmsg (histdb));
-                exit (EX_HIST);
-            }
-            flushist = now;
-        }
     }
 
     /*
      * All done, flush database changes to file.
      */
-    rc = sqlite3_exec (histdb, "COMMIT", NULL, NULL, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf (stderr, "ftbackup: sqlite3_exec(%s, COMMIT) error: %s\n", histdbname, sqlite3_errmsg (histdb));
+    sts = ix_close_file (filerab);
+    if (sts != IX_SUCCESS) {
+        fprintf (stderr, "ftbackup: ix_close(%s) error: %s\n", histdbname_files, ix_errlist (sts));
         exit (EX_HIST);
     }
 
-    /*
-     * Close database.
-     */
-    sqlite3_finalize (fileins);
-    sqlite3_finalize (filesel);
-    sqlite3_finalize (inststmt);
-    sqlite3_close (histdb);
     wht_runtime += getruntime ();
 
     printthreadruntime ("history", wht_runtime);
