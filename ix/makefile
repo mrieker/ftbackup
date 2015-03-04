@@ -6,7 +6,7 @@ OBJ_DIR=BIN
 LIB_DIR=BIN
 BIN_DIR=BIN
 
-CC=cc -Wall -Werror -g -O2 -c
+CC=cc -Wall -Werror -O2 -g -c
 LD=cc -g
 RM=rm -f
 AR=ar rcv

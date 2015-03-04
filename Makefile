@@ -102,7 +102,7 @@ cryptopp562/libcryptopp.a: cryptopp562.zip
 #
 #  Compile IX library
 #
-ix/BIN/libix.a:
+ix/BIN/libix.a: ix/*.c ix/*.h ix/makefile
 	mkdir -p ix/BIN
 	cd ix ; make
 

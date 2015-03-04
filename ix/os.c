@@ -607,19 +607,17 @@ static uLong writeit (Rab *rab, Vbn vbn, Rsz rsz, Rbf *rbf)
 
 #else
 
-  int sts;
+  off_t offset;
+  ssize_t sts;
   uLong status;
 
   status = reopen (rab);			/* make sure it's open */
   if (status != IX_SUCCESS) return (status);
 
-  sts = lseek (rab -> fd, vbn * rab -> fhd -> bls, SEEK_SET);
-  if (sts < 0) {
-    ix_errorlog (rab, "error positioning to block %u - %s", vbn, ix_unixerr ());
-    return (IX_SEEKERROR);
-  }
-  sts = write (rab -> fd, rbf, rsz);
-  if (sts < (int) rsz) {
+  offset  = vbn;
+  offset *=  rab -> fhd -> bls;
+  sts = pwrite (rab -> fd, rbf, rsz, offset);
+  if (sts < (ssize_t)(size_t) rsz) {
     if (sts < 0) ix_errorlog (rab, "error writing %u bytes at %u - %s", 
                                                        rsz, vbn, ix_unixerr ());
     else ix_errorlog (rab, "error writing %u bytes at %u - end of file", 
@@ -954,21 +952,17 @@ uLong ix_os_readit (Rab *rab, Vbn vbn, Rsz rsz, Rbf *rbf)
 
 #else
 
-  int sts;
-  unsigned int offset, status;
+  off_t offset;
+  ssize_t sts;
+  uLong status;
 
   status = reopen (rab);			/* make sure it's open */
   if (status != IX_SUCCESS) return (status);
 
   offset = vbn;
   if (offset != 0) offset *= rab -> fhd -> bls;
-  sts = lseek (rab -> fd, offset, SEEK_SET);
-  if (sts < 0) {
-    ix_errorlog (rab, "error positioning to block %u - %s", vbn, ix_unixerr ());
-    return (IX_SEEKERROR);
-  }
-  sts = read (rab -> fd, rbf, rsz);
-  if (sts < (int) rsz) {
+  sts = pread (rab -> fd, rbf, rsz, offset);
+  if (sts < (ssize_t)(size_t) rsz) {
     if (sts < 0) ix_errorlog (rab, "error reading %u bytes at %u - %s", 
                                                        rsz, vbn, ix_unixerr ());
     else ix_errorlog (rab, "error reading %u bytes at %u - end of file", 
