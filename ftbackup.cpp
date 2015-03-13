@@ -1388,7 +1388,11 @@ static bool sanitizedatestr (char *outstr, char const *instr)
         if (*p == 0) return true;
 
         delim = *(outstr ++);
-        if ((delim != ' ') && (*(p ++) != delim)) return false;
+        if (delim == ' ') {
+            if ((*p == ' ') || (*p == '@') || (*p == 'T')) p ++;
+        } else {
+            if (*(p ++) != delim) return false;
+        }
 
         len   = 2;
         instr = p;
