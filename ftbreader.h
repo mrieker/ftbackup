@@ -24,6 +24,7 @@
 
 struct FTBReader : FTBackup {
     bool opt_incrmntl;
+    bool opt_mkdirs;
     bool opt_overwrite;
     uint32_t opt_simrderrs;
 
@@ -68,6 +69,7 @@ private:
     bool read_directory (Header *hdr, char const *dstname, bool *setimes);
     bool read_symlink (Header *hdr, char const *dstname);
     bool read_special (Header *hdr, char const *dstname);
+    void do_mkdirs (char const *dstname);
     void read_raw (void *buf, uint32_t len, bool zip);
     Block *read_block (bool skipfh);
     void read_first_block ();

@@ -44,6 +44,7 @@ static bool rmdirentry  (IFSAccess *ifsa, char const *dirname, char const *entna
 FTBReader::FTBReader ()
 {
     opt_incrmntl  = false;
+    opt_mkdirs    = false;
     opt_overwrite = false;
     opt_simrderrs = 0;
 
@@ -434,6 +435,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
                 return false;
             }
             if (opt_overwrite) tfs->fsunlink (dstname);
+            if (opt_mkdirs) do_mkdirs (dstname);
             if (tfs->fslink (inodesname[oldfileno], dstname) < 0) {
                 fprintf (stderr, "ftbackup: link(%s, %s) error: %s\n", inodesname[oldfileno], dstname, mystrerr (errno));
                 return false;
@@ -450,6 +452,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
         fd = -1;
     } else {
         if (opt_overwrite) tfs->fsunlink (dstname);
+        if (opt_mkdirs) do_mkdirs (dstname);
         fd = tfs->fsopen (dstname, O_WRONLY | O_CREAT | O_EXCL, hdr->stmode);
         if (fd < 0) {
             fprintf (stderr, "ftbackup: creat(%s) error: %s\n", dstname, mystrerr (errno));
@@ -550,6 +553,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
      */
     ok = true;
     if (dstname != FTBREADER_SELECT_SKIP) {
+        if (opt_mkdirs) do_mkdirs (dstname);
         *setimes = tfs->fsmkdir (dstname, hdr->stmode) >= 0;
         if (!*setimes && (errno != EEXIST)) {
             fprintf (stderr, "ftbackup: mkdir(%s) error: %s\n", dstname, mystrerr (errno));
@@ -732,6 +736,7 @@ bool FTBReader::read_symlink (Header *hdr, char const *dstname)
 
     if (dstname != FTBREADER_SELECT_SKIP) {
         if (opt_overwrite) tfs->fsunlink (dstname);
+        if (opt_mkdirs) do_mkdirs (dstname);
         if (tfs->fssymlink (link, dstname) < 0) {
             fprintf (stderr, "ftbackup: symlink(%s) error: %s\n", dstname, mystrerr (errno));
             return false;
@@ -756,12 +761,34 @@ bool FTBReader::read_special (Header *hdr, char const *dstname)
 
     if (dstname != FTBREADER_SELECT_SKIP) {
         if (opt_overwrite) tfs->fsunlink (dstname);
+        if (opt_mkdirs) do_mkdirs (dstname);
         if (tfs->fsmknod (dstname, hdr->stmode, rdev) < 0) {
             fprintf (stderr, "ftbackup: mknod(%s) error: %s\n", dstname, mystrerr (errno));
             return false;
         }
     }
     return true;
+}
+
+/**
+ * @brief User wants us to create any needed directories for the given file.
+ * @param dstname = name of file that is about to be created
+ */
+void FTBReader::do_mkdirs (char const *dstname)
+{
+    int len = strlen (dstname);
+    char dirname[len+1];
+    strcpy (dirname, dstname);
+    for (int i = 0; ++ i < len;) {
+        if (dirname[i] == '/') {
+            dirname[i] = 0;
+            if ((tfs->fsmkdir (dirname, 0700) < 0) && (errno != EEXIST)) {
+                fprintf (stderr, "ftbackup: mkdir(%s) error: %s\n", dirname, mystrerr (errno));
+                break;
+            }
+            dirname[i] = '/';
+        }
+    }
 }
 
 /**

@@ -1762,6 +1762,10 @@ static int cmd_restore (int argc, char **argv, IFSAccess *tfs)
                 ftbreadmapper.opt_overwrite = true;
                 continue;
             }
+            if (strcasecmp (argv[i], "-mkdirs") == 0) {
+                ftbreadmapper.opt_mkdirs = true;
+                continue;
+            }
             if (strcasecmp (argv[i], "-overwrite") == 0) {
                 ftbreadmapper.opt_overwrite = true;
                 continue;
@@ -1810,7 +1814,7 @@ static int cmd_restore (int argc, char **argv, IFSAccess *tfs)
     return ftbreadmapper.read_saveset (ssname);
 
 usage:
-    fprintf (stderr, "usage: ftbackup %s [-decrypt ...] [-incremental] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> {<savewildcard> -to <outputmapping>} ...\n", argv[0]);
+    fprintf (stderr, "usage: ftbackup %s [-decrypt ...] [-incremental] [-mkdirs] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> {<savewildcard> -to <outputmapping>} ...\n", argv[0]);
     usagecipherargs ("decrypt");
     fprintf (stderr, "        <savewildcard> = select files from saveset that match this wildcard\n");
     fprintf (stderr, "        <outputmapping> = map the matching filenames to this string\n");
