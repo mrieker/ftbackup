@@ -82,8 +82,10 @@ IFSAccess::~IFSAccess () { }
 struct CompFSAccess : IFSAccess {
     CompFSAccess ();
 
-    virtual int fsopen (char const *name, int flags, mode_t mode=0);
+    virtual int fsopen (char const *name, int flags, mode_t mode=0) { errno = ENOSYS; return -1; }
     virtual int fsclose (int fd) { return close (fd); }
+    virtual int fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode=0);
+    virtual int fsclose (int fd, char const *name, char const *tmpname, bool overwrite) { return close (fd); }
     virtual int fsftruncate (int fd, uint64_t len);
     virtual int fsread (int fd, void *buf, int len) { errno = ENOSYS; return -1; }
     virtual int fspread (int fd, void *buf, int len, uint64_t pos) { errno = ENOSYS; return -1; }
@@ -118,7 +120,7 @@ CompFSAccess::CompFSAccess () { }
 static CompFSAccess compFSAccess;
 
 // instead of creating the file, we open it for reading so when file is written, we can compare data.
-int CompFSAccess::fsopen (char const *name, int flags, mode_t mode)
+int CompFSAccess::fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode)
 {
     int fd = open (name, O_RDONLY | O_NOATIME, mode);
     if (fd < 0) fd = open (name, O_RDONLY, mode);
@@ -290,6 +292,8 @@ struct FullFSAccess : IFSAccess {
 
     virtual int fsopen (char const *name, int flags, mode_t mode=0) { return open (name, flags, mode); }
     virtual int fsclose (int fd) { return close (fd); }
+    virtual int fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode=0);
+    virtual int fsclose (int fd, char const *name, char const *tmpname, bool overwrite);
     virtual int fsftruncate (int fd, uint64_t len) { return ftruncate (fd, len); }
     virtual int fsread (int fd, void *buf, int len) { return read (fd, buf, len); }
     virtual int fspread (int fd, void *buf, int len, uint64_t pos) { return pread (fd, buf, len, pos); }
@@ -323,6 +327,40 @@ struct FullFSAccess : IFSAccess {
 };
 
 FullFSAccess::FullFSAccess () { }
+
+int FullFSAccess::fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode)
+{
+    struct stat statbuf;
+
+    // optimization:  if not overwriting and permanent file already exists, return EEXIST
+    if (!overwrite && (stat (name, &statbuf) >= 0)) {
+        errno = EEXIST;
+        return -1;
+    }
+
+    // either overwriting or file doesn't exist, create temporary file
+    return open (tmpname, O_WRONLY | O_CREAT, mode);
+}
+
+int FullFSAccess::fsclose (int fd, char const *name, char const *tmpname, bool overwrite)
+{
+    // close temporary file
+    if (close (fd) < 0) return -1;
+
+    // if overwriting, rename temp file to perm name, deleting any previous perm file
+    if (overwrite) {
+        if (rename (tmpname, name) < 0) return -2;
+    } else {
+
+        // not overwriting, attempt to create hardlink, failing if perm file already exists
+        if (link (tmpname, name) < 0) return -3;
+
+        // remove temp file name
+        unlink (tmpname);
+    }
+    return 0;
+}
+
 static FullFSAccess fullFSAccess;
 
 /**
@@ -333,6 +371,8 @@ struct NullFSAccess : IFSAccess {
 
     virtual int fsopen (char const *name, int flags, mode_t mode=0) { errno = ENOSYS; return -1; }
     virtual int fsclose (int fd) { errno = ENOSYS; return -1; }
+    virtual int fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode=0) { errno = ENOSYS; return -1; }
+    virtual int fsclose (int fd, char const *name, char const *tmpname, bool overwrite) { errno = ENOSYS; return -1; }
     virtual int fsftruncate (int fd, uint64_t len) { errno = ENOSYS; return -1; }
     virtual int fsread (int fd, void *buf, int len) { errno = ENOSYS; return -1; }
     virtual int fspread (int fd, void *buf, int len, uint64_t pos) { errno = ENOSYS; return -1; }

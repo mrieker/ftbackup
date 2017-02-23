@@ -418,11 +418,14 @@ static uint32_t extpackeduint32 (char const **ptr)
  */
 bool FTBReader::read_regular (Header *hdr, char const *dstname)
 {
+    char tmpname[strlen(dstname)+15];
     int fd, rc;
     struct stat statbuf;
     uint32_t oldfileno, wofs;
     uint64_t len, rofs;
     uint8_t buf[FILEIOSIZE];
+
+    sprintf (tmpname, "%s.$$ftbackup$$", dstname);
 
     /*
      * See if it's an hardlink to an earlier file in the saveset.
@@ -445,15 +448,13 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
     }
 
     /*
-     * Not an hardlink, create the file and put in list of hardlinkable files.
-     * Use O_EXCL to be consistent with other things like link(),mkdir(),mknod(),symlink().
+     * Not an hardlink, create a temp file and put in list of hardlinkable files.
      */
     if (dstname == FTBREADER_SELECT_SKIP) {
         fd = -1;
     } else {
-        if (opt_overwrite) tfs->fsunlink (dstname);
         if (opt_mkdirs) do_mkdirs (dstname);
-        fd = tfs->fsopen (dstname, O_WRONLY | O_CREAT | O_EXCL, hdr->stmode);
+        fd = tfs->fscreat (dstname, tmpname, opt_overwrite, hdr->stmode);
         if (fd < 0) {
             fprintf (stderr, "ftbackup: creat(%s) error: %s\n", dstname, mystrerr (errno));
         } else if (tfs->fsftruncate (fd, hdr->size) < 0) {
@@ -519,10 +520,10 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
     }
 
     /*
-     * Done writing, close file.
+     * Done writing, close file and rename to permanent.
      */
-    if ((fd >= 0) && (tfs->fsclose (fd) < 0)) {
-        fprintf (stderr, "ftbackup: close(%s) error %s\n", dstname, mystrerr (errno));
+    if ((fd >= 0) && ((rc = tfs->fsclose (fd, dstname, tmpname, opt_overwrite)) < 0)) {
+        fprintf (stderr, "ftbackup: close(%s) error %s [%d]\n", dstname, mystrerr (errno), rc);
         fd = -1;
     }
 

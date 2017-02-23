@@ -147,6 +147,8 @@ struct IFSAccess {
 
     virtual int fsopen (char const *name, int flags, mode_t mode=0) =0;
     virtual int fsclose (int fd) =0;
+    virtual int fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode=0) =0;
+    virtual int fsclose (int fd, char const *name, char const *tmpname, bool overwrite) =0;
     virtual int fsftruncate (int fd, uint64_t len) =0;
     virtual int fsread (int fd, void *buf, int len) =0;
     virtual int fspread (int fd, void *buf, int len, uint64_t pos) =0;
