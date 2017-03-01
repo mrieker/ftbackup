@@ -418,14 +418,12 @@ static uint32_t extpackeduint32 (char const **ptr)
  */
 bool FTBReader::read_regular (Header *hdr, char const *dstname)
 {
-    char tmpname[strlen(dstname)+15];
+    char *tmpname = NULL;
     int fd, rc;
     struct stat statbuf;
     uint32_t oldfileno, wofs;
     uint64_t len, rofs;
     uint8_t buf[FILEIOSIZE];
-
-    sprintf (tmpname, "%s.$$ftbackup$$", dstname);
 
     /*
      * See if it's an hardlink to an earlier file in the saveset.
@@ -453,6 +451,8 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
     if (dstname == FTBREADER_SELECT_SKIP) {
         fd = -1;
     } else {
+        tmpname = (char *) alloca (strlen (dstname) + 15);
+        sprintf (tmpname, "%s.$$ftbackup$$", dstname);
         if (opt_mkdirs) do_mkdirs (dstname);
         fd = tfs->fscreat (dstname, tmpname, opt_overwrite, hdr->stmode);
         if (fd < 0) {
