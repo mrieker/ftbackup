@@ -184,6 +184,7 @@ char const *mystrerr (int err);
 int wildcardlength (char const *wild);
 bool wildcardchar (char c);
 bool wildcardmatch (char const *wild, char const *name);
+int myalphasort (const struct dirent **a, const struct dirent **b);
 
 static inline uint64_t quadswab (uint64_t q)
 {

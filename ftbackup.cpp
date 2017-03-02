@@ -932,13 +932,13 @@ static bool diff_directory (char const *path1, char const *path2)
 
     err = false;
 
-    nents1 = scandir (path1, &names1, NULL, alphasort);
+    nents1 = scandir (path1, &names1, NULL, myalphasort);
     if (nents1 < 0) {
         printf ("\ndiff directory scandir %s error: %s\n", path1, mystrerr (errno));
         return true;
     }
 
-    nents2 = scandir (path2, &names2, NULL, alphasort);
+    nents2 = scandir (path2, &names2, NULL, myalphasort);
     if (nents2 < 0) {
         printf ("\ndiff directory scandir %s error: %s\n", path2, mystrerr (errno));
         names2 = NULL;
@@ -2612,4 +2612,24 @@ bool wildcardmatch (char const *wild, char const *name)
     }
 
     return j >= nmend;
+}
+
+/**
+ * Sort function for scandir().
+ * Strict sorting by unsigned char with no locale-dependent comparison.
+ * Unsigned compare makes sure abc comes before abc<somethingelse>.
+ * Must sort in same order as pathcmp().
+ * @returns > 0: a comes after b
+ *          < 0: a comes before b
+ *          = 0: a same as b
+ */
+int myalphasort (const struct dirent **a, const struct dirent **b)
+{
+    char c, d;
+    char const *p = (*a)->d_name;
+    char const *q = (*b)->d_name;
+    while ((c = *p) == (d = *q) && (c != 0)) {
+        p ++; q ++;
+    }
+    return (int) (unsigned int) (unsigned char) c - (int) (unsigned int) (unsigned char) d;
 }

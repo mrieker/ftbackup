@@ -560,7 +560,9 @@ static int pathcmp (char const *p1, char const *p2)
     if (c2 == 0)   return  1;
     if (c1 == '/') return -1;  // abc/<somethingmaybenothing> always comes before abc<anythingelse>
     if (c2 == '/') return  1;
-    return (int) c1 - (int) c2;
+
+    // unsigned so it is same order as myalphasort()
+    return (int) (unsigned int) (unsigned char) c1 - (int) (unsigned int) (unsigned char) c2;
 }
 
 static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val)
@@ -716,7 +718,7 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
     /*
      * Read and sort the directory contents.
      */
-    nents = tfs->fsscandir (hdr->name, &names, NULL, alphasort);
+    nents = tfs->fsscandir (hdr->name, &names, NULL, myalphasort);
     if (nents < 0) {
         fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", hdr->name, mystrerr (errno));
         return false;

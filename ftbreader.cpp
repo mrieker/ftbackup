@@ -572,7 +572,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
     names = NULL;
     nents = 0;
     if (opt_incrmntl && (dstname != FTBREADER_SELECT_SKIP)) {
-        nents = tfs->fsscandir (dstname, &names, NULL, alphasort);
+        nents = tfs->fsscandir (dstname, &names, NULL, myalphasort);
         if (nents < 0) {
             fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dstname, mystrerr (errno));
             names = NULL;
@@ -1707,7 +1707,7 @@ static uint32_t findnextsegno (char const *basename, uint32_t lastsegno)
     /*
      * Scan whatever directory the base name file is in.
      */
-    nents = scandir (dirname, &names, NULL, alphasort);
+    nents = scandir (dirname, &names, NULL, myalphasort);
     if (nents < 0) {
         fprintf (stderr, "ftbackup: scandir(%s) error: %s\n", dirname, mystrerr (errno));
         exit (EX_SSIO);
