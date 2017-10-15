@@ -1464,7 +1464,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
         /*
          * We should always be able to get its size and what type of file it is.
          */
-        if (!fstat (ssfd, &ssstat) < 0) SYSERRNO (fstat);
+        if (fstat (ssfd, &ssstat) < 0) SYSERRNO (fstat);
 
         /*
          * Save what position within all segments this segment starts at.
