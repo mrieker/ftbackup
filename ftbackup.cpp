@@ -56,8 +56,8 @@ static int cmd_help (int argc, char **argv);
 static char *afgetln (FILE *file);
 static int cmd_history (int argc, char **argv);
 static bool sanitizedatestr (char *outstr, char const *instr);
-static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards, bool del);
-static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards);
+static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char const **wildcards, bool del);
+static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char const **wildcards);
 static int cmd_license (int argc, char **argv);
 static int cmd_list (int argc, char **argv);
 static int cmd_restore (int argc, char **argv, IFSAccess *tfs);
@@ -1350,7 +1350,7 @@ static int cmd_history (int argc, char **argv)
     bool delss, listss;
     char const *histdbname;
     char ssbefore[24], sssince[24];
-    char **wildcards;
+    char const **wildcards;
     int i, nwildcards, rc;
 
     /*
@@ -1361,7 +1361,7 @@ static int cmd_history (int argc, char **argv)
     histdbname = NULL;
     strcpy (ssbefore, "9999-99-99 99:99:99");
     strcpy (sssince,  "0000-00-00 00:00:00");
-    wildcards  = (char **) alloca (argc * sizeof *wildcards);
+    wildcards  = (char const **) alloca (argc * sizeof *wildcards);
     nwildcards = 0;
     for (i = 0; ++ i < argc;) {
         if (argv[i][0] == '-') {
@@ -1442,7 +1442,7 @@ static bool sanitizedatestr (char *outstr, char const *instr)
 /**
  * @brief Delete savesets from or List savesets in the database.
  */
-static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards, bool del)
+static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char const **wildcards, bool del)
 {
     char const *name, *wildcard;
     char time[20];
@@ -1480,6 +1480,16 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
     if (sts != IX_SUCCESS) {
         fprintf (stderr, "ftbackup: ix_open_file(%s) error: %s\n", histdbname_saves, ix_errlist (sts));
         exit (EX_HIST);
+    }
+
+    /*
+     * If no wildcard given, use '**' to get everything.
+     * Only for the list function (not delete).
+     */
+    if (!del && (nwildcards == 0)) {
+        wildcards = (char const **) alloca (sizeof *wildcards);
+        wildcards[0] = "**";
+        nwildcards = 1;
     }
 
     /*
@@ -1614,7 +1624,7 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
 /**
  * @brief List files in the database.
  */
-static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char **wildcards)
+static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char const **wildcards)
 {
     char const *name, *wildcard;
     HistFileRec filebuf;
@@ -1645,6 +1655,15 @@ static int cmd_history_list (char const *sssince, char const *ssbefore, char con
     if (sts != IX_SUCCESS) {
         fprintf (stderr, "ftbackup: ix_open(%s) error: %s\n", histdbname_saves, ix_errlist (sts));
         exit (EX_HIST);
+    }
+
+    /*
+     * If no wildcard given, use '**' to get everything.
+     */
+    if (nwildcards == 0) {
+        wildcards = (char const **) alloca (sizeof *wildcards);
+        wildcards[0] = "**";
+        nwildcards = 1;
     }
 
     /*
