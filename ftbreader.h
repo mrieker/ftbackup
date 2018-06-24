@@ -81,6 +81,8 @@ private:
 struct FTBReadMapper : FTBReader {
     bool opt_verbose;
     int opt_verbsec;
+    bool opt_xverbose;
+    int opt_xverbsec;
 
     FTBReadMapper ();
     ~FTBReadMapper ();
@@ -98,6 +100,7 @@ private:
     FTBReadMap *mappings;
     int dstnameall;
     time_t lastverbsec;
+    time_t lastxverbsec;
 };
 
 #endif

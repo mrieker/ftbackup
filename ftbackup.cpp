@@ -1847,6 +1847,19 @@ static int cmd_restore (int argc, char **argv, IFSAccess *tfs)
                 }
                 continue;
             }
+            if (strcasecmp (argv[i], "-xverbose") == 0) {
+                ftbreadmapper.opt_xverbose = true;
+                continue;
+            }
+            if (strcasecmp (argv[i], "-xverbsec") == 0) {
+                if (++ i >= argc) goto usage;
+                ftbreadmapper.opt_xverbsec = strtol (argv[i], &p, 0);
+                if ((*p != 0) || (ftbreadmapper.opt_xverbsec <= 0)) {
+                    fprintf (stderr, "ftbackup: xverbsec %s must be integer greater than zero\n", argv[i]);
+                    goto usage;
+                }
+                continue;
+            }
             fprintf (stderr, "ftbackup: unknown option %s\n", argv[i]);
             goto usage;
         }
@@ -1873,7 +1886,7 @@ static int cmd_restore (int argc, char **argv, IFSAccess *tfs)
     return ftbreadmapper.read_saveset (ssname);
 
 usage:
-    fprintf (stderr, "usage: ftbackup %s [-decrypt ...] [-incremental] [-mkdirs] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] <saveset> {<savewildcard> -to <outputmapping>} ...\n", argv[0]);
+    fprintf (stderr, "usage: ftbackup %s [-decrypt ...] [-incremental] [-mkdirs] [-overwrite] [-simrderrs <mod>] [-verbose] [-verbsec <seconds>] [-xverbose] [-xverbsec <seconds>] <saveset> {<savewildcard> -to <outputmapping>} ...\n", argv[0]);
     usagecipherargs ("decrypt");
     fprintf (stderr, "        <savewildcard> = select files from saveset that match this wildcard\n");
     fprintf (stderr, "        <outputmapping> = map the matching filenames to this string\n");

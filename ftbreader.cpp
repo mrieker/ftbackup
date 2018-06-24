@@ -1804,13 +1804,16 @@ static bool rmdirentry (IFSAccess *ifsa, char const *dirname, char const *entnam
  */
 FTBReadMapper::FTBReadMapper ()
 {
-    opt_verbose = false;
-    opt_verbsec = 0;
+    opt_verbose  = false;
+    opt_verbsec  = 0;
+    opt_xverbose = false;
+    opt_xverbsec = 0;
 
-    dstnamebuf  = NULL;
-    mappings    = NULL;
-    dstnameall  = 0;
-    lastverbsec = 0;
+    dstnamebuf   = NULL;
+    mappings     = NULL;
+    dstnameall   = 0;
+    lastverbsec  = 0;
+    lastxverbsec = 0;
 }
 
 FTBReadMapper::~FTBReadMapper ()
@@ -1949,5 +1952,10 @@ nextmap:;
      * name might match, or finish up (DONE) because it isn't possible for
      * another name to match.
      */
+    if (opt_xverbose || ((opt_xverbsec > 0) && (time (NULL) >= lastxverbsec + opt_xverbsec))) {
+        lastxverbsec = time (NULL);
+        fputc ('~', stderr);
+        print_header (stderr, hdr, hdr->name);
+    }
     return rc;
 }
