@@ -313,12 +313,10 @@ struct FullFSAccess : IFSAccess {
     virtual int fsreadlink (char const *name, char *buf, int len) { return readlink (name, buf, len); }
     virtual int fsscandir (char const *dirname, struct dirent ***names,
             int (*filter)(const struct dirent *),
-            int (*compar)(const struct dirent **, const struct dirent **)) {
-        return scandir (dirname, names, filter, compar);
-    }
+            int (*compar)(const struct dirent **, const struct dirent **));
     virtual int fsmkdir (char const *dirname, mode_t mode) { return mkdir (dirname, mode); }
     virtual int fsmknod (char const *name, mode_t mode, dev_t rdev) { return mknod (name, mode, rdev); }
-    virtual DIR *fsopendir (char const *name) { return opendir (name); }
+    virtual DIR *fsopendir (char const *name);
     virtual struct dirent *fsreaddir (DIR *dir) { return readdir (dir); }
     virtual void fsclosedir (DIR *dir) { closedir (dir); }
     virtual int fsllistxattr (char const *path, char *list, int size) { return llistxattr (path, list, size); }
@@ -359,6 +357,46 @@ int FullFSAccess::fsclose (int fd, char const *name, char const *tmpname, bool o
         unlink (tmpname);
     }
     return 0;
+}
+
+// scan directory opened with O_NOATIME flag
+int FullFSAccess::fsscandir (char const *dirname, struct dirent ***names,
+        int (*filter)(const struct dirent *),
+        int (*compar)(const struct dirent **, const struct dirent **))
+{
+    DIR *dir = fsopendir (dirname);
+    if (dir == NULL) return -1;
+    int nalloc = 8;
+    int nfilld = 0;
+    struct dirent **list = (struct dirent **) malloc (nalloc * sizeof *list);
+    if (list == NULL) NOMEM ();
+    for (struct dirent *ent; (ent = fsreaddir (dir)) != NULL;) {
+        if (nfilld >= nalloc) {
+            nalloc += nalloc / 2;
+            list = (struct dirent **) realloc (list, nalloc * sizeof *list);
+            if (list == NULL) NOMEM ();
+        }
+        if (ent->d_reclen <= (unsigned long) ent->d_name + strlen (ent->d_name) - (unsigned long) ent) abort ();
+        struct dirent *entry = (struct dirent *) malloc (ent->d_reclen);
+        if (entry == NULL) NOMEM ();
+        memcpy (entry, ent, ent->d_reclen);
+        list[nfilld++] = entry;
+    }
+    closedir (dir);
+    qsort (list, nfilld, sizeof *list, (int (*)(void const *, void const *)) compar);
+    *names = list;
+    return nfilld;
+}
+
+// open directory with O_NOATIME flag
+DIR *FullFSAccess::fsopendir (char const *name)
+{
+    int fd = fsopen (name, O_RDONLY | O_NOATIME | O_DIRECTORY);
+    if (fd < 0) fd = fsopen (name, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) return NULL;
+    DIR *dir = fdopendir (fd);
+    if (dir == NULL) close (fd);
+    return dir;
 }
 
 static FullFSAccess fullFSAccess;
