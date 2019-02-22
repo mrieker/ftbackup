@@ -1166,9 +1166,9 @@ static bool diff_special (char const *path1, char const *path2, struct stat *sta
 
     if (stat1->st_rdev != stat2->st_rdev) {
         len = (strlen (path1) > strlen (path2)) ? strlen (path1) : strlen (path2);
-        printf ("\ndiff special rdev mismatch\n  %*s  0x%.8lX\n  %*s  0x%.8lX\n",
-                len, path1, stat1->st_rdev,
-                len, path2, stat2->st_rdev);
+        printf ("\ndiff special rdev mismatch\n  %*s  0x%.8llX\n  %*s  0x%.8llX\n",
+                len, path1, (unsigned long long) stat1->st_rdev,
+                len, path2, (unsigned long long) stat2->st_rdev);
         return true;
     }
     return false;
@@ -2314,7 +2314,7 @@ int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
     hashinilen = hasher->DigestSize ();
     if (hashinilen < defkeylen) {
         fprintf (stderr, "ftbackup: hash %s size %u too small for cipher %s key size %lu\n",
-                hashername, hashinilen, ciphername, defkeylen);
+                hashername, hashinilen, ciphername, (unsigned long) defkeylen);
         return -1;
     }
 

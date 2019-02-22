@@ -666,7 +666,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
             namelen = strnlen (nameptr, buf + len - nameptr);
             if (numsame + 1 + namelen > sizeof buf) abort ();
             memmove (buf + numsame + 1, nameptr, namelen);
-            if (namelen >= buf + len - nameptr) {
+            if ((unsigned long) namelen >= (unsigned long) (buf + len - nameptr)) {
                 namelen += numsame + 1;  // point just past last good char at beg of buf
                 nameptr  = buf + len;    // cause next loop to read from directory
                 continue;                // read more from directory

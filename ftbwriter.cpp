@@ -671,7 +671,8 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
         if ((inodeslist == NULL) || (inodesmtim == NULL)) NOMEM ();
     }
     if (inodesdevno != statbuf->st_dev) {
-        fprintf (stderr, "ftbackup: %s different dev_t %lu than %lu\n", hdr->name, statbuf->st_dev, inodesdevno);
+        fprintf (stderr, "ftbackup: %s different dev_t %llu than %llu\n",
+                hdr->name, (unsigned long long) statbuf->st_dev, (unsigned long long) inodesdevno);
         ok = false;
     } else {
         while (inodesused <= i) {
