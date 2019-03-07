@@ -380,7 +380,12 @@ int FTBReader::read_saveset (char const *ssname)
          */
         if (hdr != NULL) free (hdr);
         free (lastfilenamefinished);
-        close (ssfd);
+        if (ssfd != STDIN_FILENO) {
+            close (ssfd);
+        } else {
+            char flush[4096];
+            while (read (STDIN_FILENO, flush, sizeof flush) > 0) { }
+        }
         ssfd = -1;
         return ok ? EX_OK : EX_FILIO;
 
