@@ -28,6 +28,11 @@ struct FTBReader : FTBackup {
     bool opt_overwrite;
     uint32_t opt_simrderrs;
 
+    bool opt_verbose;
+    int opt_verbsec;
+    bool opt_xverbose;
+    int opt_xverbsec;
+
     IFSAccess *tfs;     // target filesystem, ie, filesystem being restored to
 
     FTBReader ();
@@ -35,6 +40,10 @@ struct FTBReader : FTBackup {
     int read_saveset (char const *ssname);
     virtual char const *select_file (Header const *hdr) =0;
     bool decrypt_block (Block *block, uint32_t bs);
+
+protected:
+    time_t lastverbsec;
+    time_t lastxverbsec;
 
 private:
     struct LinkedBlock {
@@ -79,11 +88,6 @@ private:
 };
 
 struct FTBReadMapper : FTBReader {
-    bool opt_verbose;
-    int opt_verbsec;
-    bool opt_xverbose;
-    int opt_xverbsec;
-
     FTBReadMapper ();
     ~FTBReadMapper ();
     void add_mapping (char const *savwild, char const *outwild);
@@ -99,8 +103,6 @@ private:
     char *dstnamebuf;
     FTBReadMap *mappings;
     int dstnameall;
-    time_t lastverbsec;
-    time_t lastxverbsec;
 };
 
 #endif

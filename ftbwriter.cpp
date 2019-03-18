@@ -583,6 +583,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     bool ok;
     int fd, rc;
     struct stat statend;
+    time_t now;
     uint32_t i, plen;
     uint64_t len, ofs;
     void *buf;
@@ -629,6 +630,12 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
      * We always write the exact number of bytes shown in the header.
      */
     for (; ofs < hdr->size; ofs += rc) {
+        now = time (NULL);
+        if ((opt_verbose && (now >= lastverbsec)) ||
+            ((opt_verbsec > 0) && (now >= lastverbsec + 2 * opt_verbsec))) {
+            lastverbsec = now;
+            print_header (stderr, hdr, hdr->name, ofs);
+        }
         len  = hdr->size - ofs;                     // number of bytes to end-of-file
         if (len > FILEIOSIZE) len = FILEIOSIZE;     // never more than this at a time
         plen = (len + PAGESIZE - 1) & -PAGESIZE;    // page-aligned length for O_DIRECT
@@ -980,12 +987,15 @@ bool FTBWriter::write_special (Header *hdr, dev_t strdev)
  */
 void FTBWriter::write_header (Header *hdr)
 {
+    time_t now;
+
     memcpy (hdr->magic, HEADER_MAGIC, 8);
     hdr->fileno = ++ lastfileno;
     if (hdr->nameln > 0) {
-        if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
-            lastverbsec = time (NULL);
-            print_header (stderr, hdr, hdr->name);
+        now = time (NULL);
+        if (opt_verbose || ((opt_verbsec > 0) && (now >= lastverbsec + opt_verbsec))) {
+            lastverbsec = now;
+            print_header (stderr, hdr, hdr->name, 0);
         }
         maybe_record_file (hdr->ctimns, hdr->name);
     }

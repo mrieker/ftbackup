@@ -560,7 +560,7 @@ static int cmd_backup (int argc, char **argv)
                 if (++ i >= argc) goto usage;
                 ftbwriter.opt_verbsec = strtol (argv[i], &p, 0);
                 if ((*p != 0) || (ftbwriter.opt_verbsec <= 0)) {
-                    fprintf (stderr, "ftbackup: invalid verbsec %s\n", argv[i]);
+                    fprintf (stderr, "ftbackup: verbsec %s must be integer greater than zero\n", argv[i]);
                     goto usage;
                 }
                 continue;
@@ -1830,7 +1830,7 @@ char const *FTBLister::select_file (Header const *hdr)
     alttimehdr = *hdr;
     if (opt_atime) alttimehdr.mtimns = alttimehdr.atimns;
     if (opt_ctime) alttimehdr.mtimns = alttimehdr.ctimns;
-    print_header (stdout, &alttimehdr, hdr->name);
+    print_header (stdout, &alttimehdr, hdr->name, 0);
 
     return FTBREADER_SELECT_SKIP;
 }
@@ -2119,9 +2119,9 @@ FTBackup::~FTBackup ()
 /**
  * @brief Print a backup header giving the details of a file in the saveset.
  */
-void FTBackup::print_header (FILE *out, Header const *hdr, char const *name)
+void FTBackup::print_header (FILE *out, Header const *hdr, char const *name, uint64_t ofs)
 {
-    char ftype, prots[10], xatts;
+    char ftype, ofsbuf[28], prots[10], xatts;
     mode_t stmode;
     struct tm lcl;
     time_t sec;
@@ -2154,10 +2154,16 @@ void FTBackup::print_header (FILE *out, Header const *hdr, char const *name)
 
     sec = hdr->mtimns / 1000000000;
     lcl = *localtime (&sec);
-    fprintf (out, "%c%s%c  %6u/%6u  %12llu  %04d-%02d-%02d %02d:%02d:%02d.%09lld  %s\n",
+
+    ofsbuf[0] = 0;
+    if (ofs > 0) {
+        sprintf (ofsbuf, "  (+%llu)", ofs);
+    }
+
+    fprintf (out, "%c%s%c  %6u/%6u  %12llu  %04d-%02d-%02d %02d:%02d:%02d.%09lld  %s%s\n",
         ftype, prots, xatts, hdr->ownuid, hdr->owngid, hdr->size,
         lcl.tm_year + 1900, lcl.tm_mon + 1, lcl.tm_mday, lcl.tm_hour, lcl.tm_min, lcl.tm_sec,
-        hdr->mtimns % 1000000000, name);
+        hdr->mtimns % 1000000000, name, ofsbuf);
 }
 
 /**

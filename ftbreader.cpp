@@ -48,6 +48,14 @@ FTBReader::FTBReader ()
     opt_overwrite = false;
     opt_simrderrs = 0;
 
+    opt_verbose   = false;
+    opt_verbsec   = 0;
+    opt_xverbose  = false;
+    opt_xverbsec  = 0;
+
+    lastverbsec   = 0;
+    lastxverbsec  = 0;
+
     xorblocks     = NULL;
     skipall       = false;
     wprwrite      = false;
@@ -426,6 +434,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
     char *tmpname = NULL;
     int fd, rc;
     struct stat statbuf;
+    time_t now;
     uint32_t oldfileno, wofs;
     uint64_t len, rofs;
     uint8_t buf[FILEIOSIZE];
@@ -458,7 +467,7 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
     } else {
         tmpname = (char *) alloca (strlen (dstname) + 15);
         sprintf (tmpname, "%s.$$ftbackup$$", dstname);
-        if (opt_mkdirs) do_mkdirs (dstname);
+        do_mkdirs (dstname);
         fd = tfs->fscreat (dstname, tmpname, opt_overwrite, hdr->stmode);
         if (fd < 0) {
             fprintf (stderr, "ftbackup: creat(%s) error: %s\n", dstname, mystrerr (errno));
@@ -495,6 +504,21 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
      */
     try {
         for (rofs = 0; rofs < hdr->size; rofs += len) {
+            now = time (NULL);
+            if (dstname == FTBREADER_SELECT_SKIP) {
+                if ((opt_xverbose && (now > lastxverbsec)) ||
+                    ((opt_xverbsec > 0) && (now >= lastxverbsec + 2 * opt_xverbsec))) {
+                    lastxverbsec = now;
+                    fputc ('~', stderr);
+                    print_header (stderr, hdr, hdr->name, rofs);
+                }
+            } else {
+                if ((opt_verbose && (now > lastverbsec)) ||
+                    ((opt_verbsec > 0) && (now >= lastverbsec + 2 * opt_verbsec))) {
+                    lastverbsec = now;
+                    print_header (stderr, hdr, dstname, rofs);
+                }
+            }
             len = hdr->size - rofs;
             if (len > sizeof buf) len = sizeof buf;
             read_raw (buf, len, true);
@@ -1809,16 +1833,9 @@ static bool rmdirentry (IFSAccess *ifsa, char const *dirname, char const *entnam
  */
 FTBReadMapper::FTBReadMapper ()
 {
-    opt_verbose  = false;
-    opt_verbsec  = 0;
-    opt_xverbose = false;
-    opt_xverbsec = 0;
-
-    dstnamebuf   = NULL;
-    mappings     = NULL;
-    dstnameall   = 0;
-    lastverbsec  = 0;
-    lastxverbsec = 0;
+    dstnamebuf = NULL;
+    mappings   = NULL;
+    dstnameall = 0;
 }
 
 FTBReadMapper::~FTBReadMapper ()
@@ -1862,6 +1879,7 @@ char const *FTBReadMapper::select_file (Header const *hdr)
     char namechar, wildchar;
     FTBReadMap *readmap;
     int dstnamelen, i, j, outputmappinglen, srcnamelen, savewildcardlen;
+    time_t now;
 
     rc = FTBREADER_SELECT_DONE;
 
@@ -1940,9 +1958,10 @@ char const *FTBReadMapper::select_file (Header const *hdr)
         /*
          * Maybe output listing line.
          */
-        if (opt_verbose || ((opt_verbsec > 0) && (time (NULL) >= lastverbsec + opt_verbsec))) {
-            lastverbsec = time (NULL);
-            print_header (stderr, hdr, dstnamebuf);
+        now = time (NULL);
+        if (opt_verbose || ((opt_verbsec > 0) && (now >= lastverbsec + opt_verbsec))) {
+            lastverbsec = now;
+            print_header (stderr, hdr, dstnamebuf, 0);
         }
 
         /*
@@ -1957,10 +1976,11 @@ nextmap:;
      * name might match, or finish up (DONE) because it isn't possible for
      * another name to match.
      */
-    if (opt_xverbose || ((opt_xverbsec > 0) && (time (NULL) >= lastxverbsec + opt_xverbsec))) {
-        lastxverbsec = time (NULL);
+    now = time (NULL);
+    if (opt_xverbose || ((opt_xverbsec > 0) && (now >= lastxverbsec + opt_xverbsec))) {
+        lastxverbsec = now;
         fputc ('~', stderr);
-        print_header (stderr, hdr, hdr->name);
+        print_header (stderr, hdr, hdr->name, 0);
     }
     return rc;
 }
