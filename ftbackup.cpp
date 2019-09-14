@@ -1467,7 +1467,7 @@ static bool sanitizedatestr (char *outstr, char const *instr)
 
         delim = *(outstr ++);
         if (delim == ' ') {
-            if ((*p == ' ') || (*p == '@') || (*p == 'T')) p ++;
+            if ((*p == '@') || (*p == 'T') || (*p == 't')) p ++;
         } else {
             if (*(p ++) != delim) return false;
         }
@@ -1664,7 +1664,9 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
  */
 static int cmd_history_list (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char const **wildcards)
 {
+    bool first;
     char const *name, *wildcard;
+    char ssdatestr[24];
     HistFileRec filebuf;
     HistSaveRec savebuf;
     int i, j;
@@ -1717,7 +1719,7 @@ static int cmd_history_list (char const *sssince, char const *ssbefore, char con
             name = filebuf.path;
             if ((wildcardlen > 0) && (memcmp (name, wildcard, wildcardlen) > 0)) break;
             if (wildcardmatch (wildcard, name)) {
-                printf ("\n%s\n", name);
+                first = true;
 
                 /*
                  * Print out savesets' time and name.
@@ -1728,10 +1730,16 @@ static int cmd_history_list (char const *sssince, char const *ssbefore, char con
                         timens = quadswab (savebuf.timens_BE);
                         timesc = timens / 1000000000U;
                         timetm = *localtime (&timesc);
-                        printf ("  %.4d-%.2d-%.2d %.2d:%.2d:%.2d  %s\n", 
+                        sprintf (ssdatestr, "%.4d-%.2d-%.2d %.2d:%.2d:%.2d",
                                 timetm.tm_year + 1900, timetm.tm_mon + 1, timetm.tm_mday,
-                                timetm.tm_hour, timetm.tm_min, timetm.tm_sec,
-                                savebuf.path);
+                                timetm.tm_hour, timetm.tm_min, timetm.tm_sec);
+                        if ((strcmp (ssdatestr, sssince) >= 0) && (strcmp (ssdatestr, ssbefore) < 0)) {
+                            if (first) {
+                                printf ("\n%s\n", name);
+                                first = false;
+                            }
+                            printf ("  %s  %s\n", ssdatestr, savebuf.path);
+                        }
                     }
                 }
             }
