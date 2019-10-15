@@ -2376,7 +2376,7 @@ int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
      */
     hashinibuf = (uint8_T *) malloc (hashinilen);
     if (hashinibuf == NULL) NOMEM ();
-    hasher->Update ((byte const *) keyline, (size_t) strlen (keyline));
+    hasher->Update ((CryptoPP::byte const *) keyline, (size_t) strlen (keyline));
     hasher->Final (hashinibuf);
     decipher->SetKey (hashinibuf, defkeylen, CryptoPP::g_nullNameValuePairs);
     encipher->SetKey (hashinibuf, defkeylen, CryptoPP::g_nullNameValuePairs);
@@ -2384,54 +2384,94 @@ int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
     return i;
 }
 
-#include "cryptopp562/aes.h"
-#include "cryptopp562/blowfish.h"
-#include "cryptopp562/camellia.h"
-#include "cryptopp562/cast.h"
-#include "cryptopp562/des.h"
-#include "cryptopp562/gost.h"
-#include "cryptopp562/idea.h"
-#include "cryptopp562/mars.h"
-#include "cryptopp562/rc2.h"
-#include "cryptopp562/rc5.h"
-#include "cryptopp562/rc6.h"
-#include "cryptopp562/rijndael.h"
-#include "cryptopp562/safer.h"
-#include "cryptopp562/seed.h"
-#include "cryptopp562/serpent.h"
-#include "cryptopp562/shark.h"
-#include "cryptopp562/skipjack.h"
-#include "cryptopp562/square.h"
-#include "cryptopp562/tea.h"
-#include "cryptopp562/twofish.h"
+#include "cryptopp/3way.h"
+#include "cryptopp/aes.h"
+#include "cryptopp/aria.h"
+#include "cryptopp/blowfish.h"
+#include "cryptopp/camellia.h"
+#include "cryptopp/cast.h"
+#include "cryptopp/cbcmac.h"
+#include "cryptopp/cham.h"
+#include "cryptopp/cmac.h"
+#include "cryptopp/des.h"
+#include "cryptopp/dmac.h"
+#include "cryptopp/gost.h"
+#include "cryptopp/hight.h"
+#include "cryptopp/idea.h"
+#include "cryptopp/kalyna.h"
+#include "cryptopp/lea.h"
+#include "cryptopp/lubyrack.h"
+#include "cryptopp/mars.h"
+#include "cryptopp/modes.h"
+#include "cryptopp/poly1305.h"
+#include "cryptopp/rc2.h"
+#include "cryptopp/rc5.h"
+#include "cryptopp/rc6.h"
+#include "cryptopp/rijndael.h"
+#include "cryptopp/safer.h"
+#include "cryptopp/seckey.h"
+#include "cryptopp/seed.h"
+#include "cryptopp/serpent.h"
+#include "cryptopp/shacal2.h"
+#include "cryptopp/shark.h"
+#include "cryptopp/simeck.h"
+#include "cryptopp/simon.h"
+#include "cryptopp/skipjack.h"
+#include "cryptopp/sm4.h"
+#include "cryptopp/speck.h"
+#include "cryptopp/square.h"
+#include "cryptopp/tea.h"
+#include "cryptopp/threefish.h"
+#include "cryptopp/twofish.h"
 
 #define CIPHLIST \
-    _CIPHOP (AES)       \
-    _CIPHOP (Blowfish)  \
-    _CIPHOP (Camellia)  \
-    _CIPHOP (CAST128)   \
-    _CIPHOP (CAST256)   \
-    _CIPHOP (DES)       \
-    _CIPHOP (DES_EDE2)  \
-    _CIPHOP (DES_EDE3)  \
-    _CIPHOP (DES_XEX3)  \
-    _CIPHOP (GOST)      \
-    _CIPHOP (IDEA)      \
-    _CIPHOP (MARS)      \
-    _CIPHOP (RC2)       \
-    _CIPHOP (RC5)       \
-    _CIPHOP (RC6)       \
-    _CIPHOP (Rijndael)  \
-    _CIPHOP (SAFER_K)   \
-    _CIPHOP (SAFER_SK)  \
-    _CIPHOP (SEED)      \
-    _CIPHOP (Serpent)   \
-    _CIPHOP (SHARK)     \
-    _CIPHOP (SKIPJACK)  \
-    _CIPHOP (Square)    \
-    _CIPHOP (TEA)       \
-    _CIPHOP (Twofish)   \
-    _CIPHOP (XTEA)
+    _CIPHOP (AES)           \
+    _CIPHOP (ARIA)          \
+    _CIPHOP (Blowfish)      \
+    _CIPHOP (BTEA)          \
+    _CIPHOP (Camellia)      \
+    _CIPHOP (CAST128)       \
+    _CIPHOP (CAST256)       \
+    _CIPHOP (CHAM128)       \
+    _CIPHOP (CHAM64)        \
+    _CIPHOP (DES)           \
+    _CIPHOP (DES_EDE2)      \
+    _CIPHOP (DES_EDE3)      \
+    _CIPHOP (DES_XEX3)      \
+    _CIPHOP (GOST)          \
+    _CIPHOP (HIGHT)         \
+    _CIPHOP (IDEA)          \
+    _CIPHOP (Kalyna128)     \
+    _CIPHOP (Kalyna256)     \
+    _CIPHOP (Kalyna512)     \
+    _CIPHOP (LEA)           \
+    _CIPHOP (MARS)          \
+    _CIPHOP (RC2)           \
+    _CIPHOP (RC5)           \
+    _CIPHOP (RC6)           \
+    _CIPHOP (Rijndael)      \
+    _CIPHOP (SAFER_K)       \
+    _CIPHOP (SAFER_SK)      \
+    _CIPHOP (SEED)          \
+    _CIPHOP (Serpent)       \
+    _CIPHOP (SHACAL2)       \
+    _CIPHOP (SHARK)         \
+    _CIPHOP (SIMECK32)      \
+    _CIPHOP (SIMECK64)      \
+    _CIPHOP (SIMON128)      \
+    _CIPHOP (SIMON64)       \
+    _CIPHOP (SKIPJACK)      \
+    _CIPHOP (SM4)           \
+    _CIPHOP (SPECK128)      \
+    _CIPHOP (SPECK64)       \
+    _CIPHOP (Square)        \
+    _CIPHOP (TEA)           \
+    _CIPHOP (Threefish1024) \
+    _CIPHOP (Threefish256)  \
+    _CIPHOP (Threefish512)  \
+    _CIPHOP (ThreeWay)      \
+    _CIPHOP (Twofish)       \
+    _CIPHOP (XTEA)          \
 
 static CryptoPP::BlockCipher *getciphercontext (char const *name, bool enc)
 {
@@ -2444,10 +2484,10 @@ static CryptoPP::BlockCipher *getciphercontext (char const *name, bool enc)
     return NULL;
 }
 
-#include "cryptopp562/ripemd.h"
-#include "cryptopp562/sha.h"
-#include "cryptopp562/tiger.h"
-#include "cryptopp562/whrlpool.h"
+#include "cryptopp/ripemd.h"
+#include "cryptopp/sha.h"
+#include "cryptopp/tiger.h"
+#include "cryptopp/whrlpool.h"
 
 #define HASHLIST \
     _HASHOP (RIPEMD160) \
@@ -2478,7 +2518,7 @@ static CryptoPP::HashTransformation *gethashercontext (char const *name)
  * It is used in the non-encrypted case to hash the data for an integrity check.
  */
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
-#include "cryptopp562/md5.h"
+#include "cryptopp/md5.h"
 
 void FTBackup::maybesetdefaulthasher ()
 {

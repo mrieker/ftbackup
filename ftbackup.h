@@ -34,7 +34,7 @@
 #include <unistd.h>
 #include <zlib.h>
 
-#include "cryptopp562/cryptlib.h"
+#include "cryptopp/cryptlib.h"
 
 extern "C" {
 #include "ix/ix.h"

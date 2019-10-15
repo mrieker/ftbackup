@@ -27,11 +27,7 @@ DISTVER   := $(subst -,,$(firstword $(COMMITDATE)))$(subst 0,+,$(subst 1,,$(COMM
 #  List of files that go into distribution
 #
 DISTFILES := \
-    cryptopp562.files.cpp.patch   \
-    cryptopp562.GNUmakefile.patch \
-    cryptopp562.misc.h.patch      \
-    cryptopp562.wake.cpp.patch    \
-    cryptopp562.zip               \
+    cryptopp820.sha256            \
     ftbackup.cpp                  \
     ftbackup.h                    \
     ftbackup.html                 \
@@ -47,7 +43,7 @@ DISTFILES := \
 #  Make list of source files that go into executable
 #
 LIBFILES := -lpthread -lrt -lz -lstdc++ -lm
-SRCFILES := ftbackup.cpp ftbreader.cpp ftbwriter.cpp cryptopp562/libcryptopp.a ix/BIN/libix.a
+SRCFILES := ftbackup.cpp ftbreader.cpp ftbwriter.cpp cryptopp/libcryptopp.a ix/BIN/libix.a
 ifeq ($(STATIC),)
 else
     CFLAGS := $(CFLAGS) -static
@@ -67,7 +63,7 @@ ftbackup: $(SRCFILES) ftbackup.h ftbreader.h ftbwriter.h $(VERFILE)
 #  Clean up
 #
 clean:
-	rm -rf cryptopp562
+	rm -rf cryptopp cryptopp820 cryptopp820.tmp cryptopp820.zip
 	rm -f  ftbackup
 	rm -rf ftbackup-$(DISTVER)*
 	rm -rf ix/BIN
@@ -93,15 +89,17 @@ $(VERFILE):
 #
 #  Compile crypto library
 #
-cryptopp562/libcryptopp.a: cryptopp562.zip
-	rm -rf cryptopp562
-	mkdir cryptopp562
-	cd cryptopp562 ; unzip ../cryptopp562.zip
-	patch cryptopp562/files.cpp < cryptopp562.files.cpp.patch
-	patch cryptopp562/GNUmakefile < cryptopp562.GNUmakefile.patch
-	patch cryptopp562/misc.h < cryptopp562.misc.h.patch
-	patch cryptopp562/wake.cpp < cryptopp562.wake.cpp.patch
-	cd cryptopp562 ; $(MAKE) libcryptopp.a
+cryptopp/libcryptopp.a: cryptopp820.zip
+	rm -rf cryptopp820
+	mkdir cryptopp820
+	cd cryptopp820 ; unzip ../cryptopp820.zip
+	cd cryptopp820 ; $(MAKE) libcryptopp.a
+	ln -s cryptopp820 cryptopp
+
+cryptopp820.zip: cryptopp820.sha256
+	rm -f cryptopp820.tmp cryptopp820.zip
+	wget --no-check-certificate https://www.cryptopp.com/cryptopp820.zip -O cryptopp820.tmp
+	./cryptopp820.sha256
 
 #
 #  Compile IX library

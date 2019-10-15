@@ -1681,15 +1681,15 @@ bool FTBReader::decrypt_block (Block *block, uint32_T bs)
         switch (decipher->BlockSize ()) {
             case  8: {
                 do {
-                    encipher->ProcessAndXorBlock ((byte *) &array[i+1], NULL, (byte *) temp);
-                    decipher->ProcessAndXorBlock ((byte *) &array[i], (byte *) temp, (byte *) &array[i]);
+                    encipher->ProcessAndXorBlock ((CryptoPP::byte *) &array[i+1], NULL, (CryptoPP::byte *) temp);
+                    decipher->ProcessAndXorBlock ((CryptoPP::byte *) &array[i], (CryptoPP::byte *) temp, (CryptoPP::byte *) &array[i]);
                 } while (++ i < (bs / 8) - 1);
                 break;
             }
             case 16: {
                 do {
-                    encipher->ProcessAndXorBlock ((byte *) &array[i+2], NULL, (byte *) temp);
-                    decipher->ProcessAndXorBlock ((byte *) &array[i], (byte *) temp, (byte *) &array[i]);
+                    encipher->ProcessAndXorBlock ((CryptoPP::byte *) &array[i+2], NULL, (CryptoPP::byte *) temp);
+                    decipher->ProcessAndXorBlock ((CryptoPP::byte *) &array[i], (CryptoPP::byte *) temp, (CryptoPP::byte *) &array[i]);
                     i += 2;
                 } while (i < (bs / 8) - 2);
                 break;

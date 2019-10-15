@@ -1626,16 +1626,16 @@ void FTBWriter::hash_block (Block *block)
         switch (cbs) {
             case  8: {
                 do {
-                    encipher->ProcessAndXorBlock ((byte *) &array[i], (byte *) &array[i-1], (byte *) temp);
-                    encipher->ProcessAndXorBlock ((byte *) temp, NULL, (byte *) &array[--i]);
+                    encipher->ProcessAndXorBlock ((CryptoPP::byte *) &array[i], (CryptoPP::byte *) &array[i-1], (CryptoPP::byte *) temp);
+                    encipher->ProcessAndXorBlock ((CryptoPP::byte *) temp, NULL, (CryptoPP::byte *) &array[--i]);
                 } while (i > offsetof (Block, crip) / 8);
                 break;
             }
             case 16: {
                 do {
-                    encipher->ProcessAndXorBlock ((byte *) &array[i], (byte *) &array[i-2], (byte *) temp);
+                    encipher->ProcessAndXorBlock ((CryptoPP::byte *) &array[i], (CryptoPP::byte *) &array[i-2], (CryptoPP::byte *) temp);
                     i -= 2;
-                    encipher->ProcessAndXorBlock ((byte *) temp, NULL, (byte *) &array[i]);
+                    encipher->ProcessAndXorBlock ((CryptoPP::byte *) temp, NULL, (CryptoPP::byte *) &array[i]);
                 } while (i > offsetof (Block, crip) / 8);
                 break;
             }
