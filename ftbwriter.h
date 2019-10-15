@@ -34,12 +34,12 @@ private:
     T slots[SQ_NSLOTS];
     pthread_cond_t  cond;
     pthread_mutex_t mutex;
-    uint32_t next;
-    uint32_t used;
+    uint32_T next;
+    uint32_T used;
 };
 
 struct SinceReader {
-    uint64_t ctime;
+    uint64_T ctime;
     char *fname;
 
     SinceReader ();
@@ -52,13 +52,13 @@ struct SinceReader {
 private:
     char const *sincname;
     int sincfd;
-    uint32_t sincpaths;
+    uint32_T sincpaths;
     z_stream zsinc;
 
-    uint8_t sincxbuf[4096];
-    uint8_t sinczbuf[4096];
+    uint8_T sincxbuf[4096];
+    uint8_T sinczbuf[4096];
 
-    bool rdraw (void *buf, uint32_t len);
+    bool rdraw (void *buf, uint32_T len);
 };
 
 struct FTBWriter : FTBackup {
@@ -70,7 +70,7 @@ struct FTBWriter : FTBackup {
     int ioptions;
     int ooptions;
     int opt_verbsec;
-    uint64_t opt_segsize;
+    uint64_T opt_segsize;
 
     IFSAccess *tfs;     // target filesystem, ie, filesystem being backed up
 
@@ -81,7 +81,7 @@ struct FTBWriter : FTBackup {
 private:
     struct ComprSlot {
         void    *buf;   // address of data to write
-        uint32_t len;   // length of data to write
+        uint32_T len;   // length of data to write
         int      dty;   // -1: file header to be left uncompressed, the free ()
                         //  0: data to be left uncompressed, then free ()
                         //  1: data to be compressed, then free ()
@@ -90,7 +90,7 @@ private:
 
     struct HistSlot {
         char *fname;
-        uint32_t seqno;
+        uint32_T seqno;
     };
 
     Block **xorblocks;
@@ -105,16 +105,16 @@ private:
     SinceReader sincrdr;
     SkipName *skipnames;
     time_t lastverbsec;
-    uint32_t inodessize;
-    uint32_t inodesused;
-    uint32_t lastfileno;
-    uint32_t lastseqno;
-    uint32_t lastxorno;
-    uint32_t reconamelen;
-    uint32_t thissegno;
-    uint64_t byteswrittentoseg;
-    uint64_t *inodesmtim;
-    uint64_t rft_runtime;
+    uint32_T inodessize;
+    uint32_T inodesused;
+    uint32_T lastfileno;
+    uint32_T lastseqno;
+    uint32_T lastxorno;
+    uint32_T reconamelen;
+    uint32_T thissegno;
+    uint64_T byteswrittentoseg;
+    uint64_T *inodesmtim;
+    uint64_T rft_runtime;
     z_stream zreco;
     z_stream zstrm;
 
@@ -124,7 +124,7 @@ private:
     SlotQueue<HistSlot>  histqueue;   // filenames to be written to history
     SlotQueue<Block *>   writequeue;  // blocks to be written to saveset
 
-    uint8_t recozbuf[4096];
+    uint8_T recozbuf[4096];
 
     bool write_file (char const *path, struct stat const *dirstat);
     bool write_regular (Header *hdr, struct stat const *dirstat);
@@ -134,10 +134,10 @@ private:
     bool write_special (Header *hdr, dev_t strdev);
     void write_header (Header *hdr);
     bool skipbysince (Header const *hdr);
-    void maybe_record_file (uint64_t ctime, char const *name);
-    void write_reco_data (void const *buf, uint32_t len);
-    void write_raw (void const *buf, uint32_t len, bool hdr);
-    void write_queue (void *buf, uint32_t len, int dty);
+    void maybe_record_file (uint64_T ctime, char const *name);
+    void write_reco_data (void const *buf, uint32_T len);
+    void write_raw (void const *buf, uint32_T len, bool hdr);
+    void write_queue (void *buf, uint32_T len, int dty);
     static void *compr_thread_wrapper (void *ftbw);
     void *compr_thread ();
     static void *hist_thread_wrapper (void *ftbw);

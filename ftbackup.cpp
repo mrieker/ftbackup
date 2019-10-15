@@ -86,9 +86,9 @@ struct CompFSAccess : IFSAccess {
     virtual int fsclose (int fd) { return close (fd); }
     virtual int fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode=0);
     virtual int fsclose (int fd, char const *name, char const *tmpname, bool overwrite) { return close (fd); }
-    virtual int fsftruncate (int fd, uint64_t len);
+    virtual int fsftruncate (int fd, uint64_T len);
     virtual int fsread (int fd, void *buf, int len) { errno = ENOSYS; return -1; }
-    virtual int fspread (int fd, void *buf, int len, uint64_t pos) { errno = ENOSYS; return -1; }
+    virtual int fspread (int fd, void *buf, int len, uint64_T pos) { errno = ENOSYS; return -1; }
     virtual int fswrite (int fd, void const *buf, int len);
     virtual int fsfstat (int fd, struct stat *buf) { return fstat (fd, buf); }
     virtual int fsstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
@@ -129,11 +129,11 @@ int CompFSAccess::fscreat (char const *name, char const *tmpname, bool overwrite
 
 // instead of extending file to the given size, make sure it is exactly that size
 // ...as this call is used to pre-extend the file to the exact size as in saveset
-int CompFSAccess::fsftruncate (int fd, uint64_t len)
+int CompFSAccess::fsftruncate (int fd, uint64_T len)
 {
     struct stat statbuf;
     int rc = fstat (fd, &statbuf);
-    if ((rc >= 0) && (len != (uint64_t) statbuf.st_size)) {
+    if ((rc >= 0) && (len != (uint64_T) statbuf.st_size)) {
         errno = MYEDATACMP;
         rc = -1;
     }
@@ -294,9 +294,9 @@ struct FullFSAccess : IFSAccess {
     virtual int fsclose (int fd) { return close (fd); }
     virtual int fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode=0);
     virtual int fsclose (int fd, char const *name, char const *tmpname, bool overwrite);
-    virtual int fsftruncate (int fd, uint64_t len) { return ftruncate (fd, len); }
+    virtual int fsftruncate (int fd, uint64_T len) { return ftruncate (fd, len); }
     virtual int fsread (int fd, void *buf, int len) { return read (fd, buf, len); }
-    virtual int fspread (int fd, void *buf, int len, uint64_t pos) { return pread (fd, buf, len, pos); }
+    virtual int fspread (int fd, void *buf, int len, uint64_T pos) { return pread (fd, buf, len, pos); }
     virtual int fswrite (int fd, void const *buf, int len) { return write (fd, buf, len); }
     virtual int fsfstat (int fd, struct stat *buf) { return fstat (fd, buf); }
     virtual int fsstat (char const *name, struct stat *buf) { return stat (name, buf); }
@@ -411,9 +411,9 @@ struct NullFSAccess : IFSAccess {
     virtual int fsclose (int fd) { errno = ENOSYS; return -1; }
     virtual int fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode=0) { errno = ENOSYS; return -1; }
     virtual int fsclose (int fd, char const *name, char const *tmpname, bool overwrite) { errno = ENOSYS; return -1; }
-    virtual int fsftruncate (int fd, uint64_t len) { errno = ENOSYS; return -1; }
+    virtual int fsftruncate (int fd, uint64_T len) { errno = ENOSYS; return -1; }
     virtual int fsread (int fd, void *buf, int len) { errno = ENOSYS; return -1; }
-    virtual int fspread (int fd, void *buf, int len, uint64_t pos) { errno = ENOSYS; return -1; }
+    virtual int fspread (int fd, void *buf, int len, uint64_T pos) { errno = ENOSYS; return -1; }
     virtual int fswrite (int fd, void const *buf, int len) { errno = ENOSYS; return -1; }
     virtual int fsfstat (int fd, struct stat *buf) { errno = ENOSYS; return -1; }
     virtual int fsstat (char const *name, struct stat *buf) { errno = ENOSYS; return -1; }
@@ -446,6 +446,12 @@ int main (int argc, char **argv)
 {
     setlinebuf (stdout);
     setlinebuf (stderr);
+
+    if (sizeof (uint8_T)  != 1) abort ();
+    if (sizeof (uint16_T) != 2) abort ();
+    if (sizeof (uint32_T) != 4) abort ();
+    if (sizeof (uint64_T) != 8) abort ();
+    if (sizeof (ulong_T)  != sizeof (void *)) abort ();
 
     if (argc >= 2) {
         if (strcasecmp (argv[1], "backup")     == 0) return cmd_backup     (argc - 1, argv + 1);
@@ -483,8 +489,8 @@ static int cmd_backup (int argc, char **argv)
     char *p, *rootpath, *ssname;
     FTBWriter ftbwriter = FTBWriter ();
     int i, j, k;
-    uint32_t blocksize;
-    uint64_t spansize;
+    uint32_T blocksize;
+    uint64_T spansize;
 
     rootpath = NULL;
     ssname   = NULL;
@@ -900,8 +906,8 @@ static bool diff_regular (char const *path1, char const *path2)
 {
     bool err;
     int fd1, fd2, len, rc1, rc2;
-    uint8_t buf1[FILEIOSIZE], buf2[FILEIOSIZE];
-    uint64_t ofs;
+    uint8_T buf1[FILEIOSIZE], buf2[FILEIOSIZE];
+    uint64_T ofs;
 
     fd1 = open (path1, O_RDONLY | O_NOATIME);
     if (fd1 < 0) fd1 = open (path1, O_RDONLY);
@@ -1212,7 +1218,7 @@ static int cmd_help (int argc, char **argv)
     char *buff, *html, *name, *p, *q;
     FILE *file;
     int rc;
-    uint32_t len;
+    uint32_T len;
 
     buff = NULL;
 
@@ -1226,7 +1232,7 @@ static int cmd_help (int argc, char **argv)
             fprintf (stderr, "readlink(/proc/self/exe) error: %s\n", mystrerr (errno));
             return EX_CMD;
         }
-        if ((uint32_t) rc < len) {
+        if ((uint32_T) rc < len) {
             strcpy (html + rc, ".html");
             break;
         }
@@ -1361,7 +1367,7 @@ spawn:
 static char *afgetln (FILE *file)
 {
     char *buf, *p;
-    uint32_t len, ofs;
+    uint32_T len, ofs;
 
     len = 128;
     buf = (char *) malloc (len);
@@ -1483,20 +1489,20 @@ static bool sanitizedatestr (char *outstr, char const *instr)
 static int cmd_history_delss (char const *sssince, char const *ssbefore, char const *histdbname, int nwildcards, char const **wildcards, bool del)
 {
     char const *name, *wildcard;
-    char time[20];
+    char timestr[72];
     HistFileRec filebuf;
     HistSaveRec savebuf;
     int i, j, wildcardlen;
     IX_Rsz filelen, savelen;
     IX_uLong sts;
     time_t timesc;
-    uint64_t timens;
+    uint64_T timens;
     void *rabfiles, *rabsaves;
     struct tm timetm;
 
     struct SaveKey {
         SaveKey *next;
-        uint64_t key;
+        uint64_T key;
     };
 
     SaveKey *key, *keys;
@@ -1567,7 +1573,7 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
             timens = quadswab (savebuf.timens_BE);
             timesc = timens / 1000000000U;
             timetm = *localtime (&timesc);
-            sprintf (time, "%.4d-%.2d-%.2d %.2d:%.2d:%.2d",
+            sprintf (timestr, "%.4d-%.2d-%.2d %.2d:%.2d:%.2d",
                         timetm.tm_year + 1900, timetm.tm_mon + 1, timetm.tm_mday,
                         timetm.tm_hour, timetm.tm_min, timetm.tm_sec);
 
@@ -1576,12 +1582,12 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
              */
             name = savebuf.path;
             wildcard = wildcards[i];
-            if (wildcardmatch (wildcards[i], name) && (strcmp (time, sssince) >= 0) && (strcmp (time, ssbefore) < 0)) {
+            if (wildcardmatch (wildcards[i], name) && (strcmp (timestr, sssince) >= 0) && (strcmp (timestr, ssbefore) < 0)) {
 
                 /*
                  * If so, print.
                  */
-                printf ("  %s  %s\n", time, name);
+                printf ("  %s  %s\n", timestr, name);
 
                 /*
                  * Maybe delete the saveset record.
@@ -1618,7 +1624,7 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
     if (keys != NULL) {
         while ((sts = ix_search_seq (rabfiles, 0, sizeof filebuf, (IX_Rbf *) &filebuf, &filelen, 0, NULL)) == IX_SUCCESS) {
             j = 0;
-            for (i = 0; (ulong_t)&filebuf.saves[i+1] <= (ulong_t)&filebuf + filelen; i ++) {
+            for (i = 0; (ulong_T)&filebuf.saves[i+1] <= (ulong_T)&filebuf + filelen; i ++) {
                 for (key = keys; key != NULL; key = key->next) {
                     if (key->key == filebuf.saves[i]) break;
                 }
@@ -1626,7 +1632,7 @@ static int cmd_history_delss (char const *sssince, char const *ssbefore, char co
             }
             if (j < i) {
                 if (j > 0) {
-                    sts = ix_modify_rec (rabfiles, (ulong_t)&filebuf.saves[j] - (ulong_t)&filebuf, (IX_Rbf *)&filebuf);
+                    sts = ix_modify_rec (rabfiles, (ulong_T)&filebuf.saves[j] - (ulong_T)&filebuf, (IX_Rbf *)&filebuf);
                     if (sts != IX_SUCCESS) {
                         fprintf (stderr, "ftbackup: ix_modify_rec(%s) error: %s\n", histdbname_files, ix_errlist (sts));
                         return EX_HIST;
@@ -1666,7 +1672,7 @@ static int cmd_history_list (char const *sssince, char const *ssbefore, char con
 {
     bool first;
     char const *name, *wildcard;
-    char ssdatestr[24];
+    char ssdatestr[72];
     HistFileRec filebuf;
     HistSaveRec savebuf;
     int i, j;
@@ -1675,7 +1681,7 @@ static int cmd_history_list (char const *sssince, char const *ssbefore, char con
     IX_uLong sts;
     struct tm timetm;
     time_t timesc;
-    uint64_t timens;
+    uint64_T timens;
     void *rabfiles, *rabsaves;
 
     /*
@@ -1724,7 +1730,7 @@ static int cmd_history_list (char const *sssince, char const *ssbefore, char con
                 /*
                  * Print out savesets' time and name.
                  */
-                for (j = 0; (ulong_t)&filebuf.saves[j+1] <= (ulong_t)&filebuf + filelen; j ++) {
+                for (j = 0; (ulong_T)&filebuf.saves[j+1] <= (ulong_T)&filebuf + filelen; j ++) {
                     sts = ix_search_key (rabsaves, IX_SEARCH_EQF, 0, sizeof filebuf.saves[j], (IX_Rbf *)&filebuf.saves[j], sizeof savebuf, (IX_Rbf *)&savebuf, &savelen);
                     if (sts == IX_SUCCESS) {
                         timens = quadswab (savebuf.timens_BE);
@@ -1963,9 +1969,9 @@ static int cmd_xorvfy (int argc, char **argv)
     bool ok;
     FTBXorVfy ftbxorvfy;
     int fd, i, rc;
-    uint32_t bs, bsnh, lastseqno, lastxorno, xorgn;
-    uint64_t rdpos;
-    uint8_t *xorcounts;
+    uint32_T bs, bsnh, lastseqno, lastxorno, xorgn;
+    uint64_T rdpos;
+    uint8_T *xorcounts;
 
     name      = NULL;
     ftbxorvfy = FTBXorVfy ();
@@ -2013,14 +2019,14 @@ static int cmd_xorvfy (int argc, char **argv)
     block = (Block *) malloc (bs);
     xorblocks = (Block **) malloc (baseblock.xorgc * sizeof *xorblocks);
     for (xorgn = 0; xorgn < baseblock.xorgc; xorgn ++) xorblocks[xorgn] = (Block *) calloc (1, bsnh);
-    xorcounts = (uint8_t *) calloc (baseblock.xorgc, sizeof *xorcounts);
+    xorcounts = (uint8_T *) calloc (baseblock.xorgc, sizeof *xorcounts);
 
     lastseqno = 0;
     lastxorno = 0;
     ok = false;
     rdpos = 0;
 
-    while (((rc = pread (fd, block, bs, rdpos)) >= 0) && ((uint32_t) rc == bs)) {
+    while (((rc = pread (fd, block, bs, rdpos)) >= 0) && ((uint32_T) rc == bs)) {
         if (!ftbxorvfy.decrypt_block (block, bs)) {
             fprintf (stderr, "%llu: block digest not valid\n", rdpos);
             goto done;
@@ -2056,7 +2062,7 @@ static int cmd_xorvfy (int argc, char **argv)
                 goto done;
             }
             FTBackup::xorblockdata (xorblk, block, bsnh);
-            for (rc = 0; rc < (uint8_t *)block + bsnh - block->data; rc ++) {
+            for (rc = 0; rc < (uint8_T *)block + bsnh - block->data; rc ++) {
                 if (xorblk->data[rc] != 0) {
                     fprintf (stderr, "%llu: bad xor data at xorno %u[%d]\n", rdpos, block->xorno, rc);
                     goto done;
@@ -2127,7 +2133,7 @@ FTBackup::~FTBackup ()
 /**
  * @brief Print a backup header giving the details of a file in the saveset.
  */
-void FTBackup::print_header (FILE *out, Header const *hdr, char const *name, uint64_t ofs)
+void FTBackup::print_header (FILE *out, Header const *hdr, char const *name, uint64_T ofs)
 {
     char ftype, ofsbuf[28], prots[10], xatts;
     mode_t stmode;
@@ -2180,7 +2186,7 @@ void FTBackup::print_header (FILE *out, Header const *hdr, char const *name, uin
 bool FTBackup::blockisvalid (Block *block)
 {
     Header *hdr;
-    uint32_t bsnh, i;
+    uint32_T bsnh, i;
 
     if (!blockbaseisvalid (block)) return false;
 
@@ -2191,10 +2197,10 @@ bool FTBackup::blockisvalid (Block *block)
 
     if (block->hdroffs != 0) {
         bsnh = (1 << l2bs) - hashsize ();
-        if (block->hdroffs < (ulong_t)block->data - (ulong_t)block) goto bbho;
+        if (block->hdroffs < (ulong_T)block->data - (ulong_T)block) goto bbho;
         if (block->hdroffs >= bsnh) goto bbho;
-        hdr = (Header *)((ulong_t)block + block->hdroffs);
-        i = (ulong_t)hdr->magic - (ulong_t)block;
+        hdr = (Header *)((ulong_T)block + block->hdroffs);
+        i = (ulong_T)hdr->magic - (ulong_T)block;
         if (i < bsnh) {
             i = bsnh - i;
             if (i > 8) i = 8;
@@ -2224,9 +2230,9 @@ bool FTBackup::blockbaseisvalid (Block *block)
  * @brief Compute size of hash and nonce at end of data.
  * @return hash and nonce size in bytes
  */
-uint32_t FTBackup::hashsize ()
+uint32_T FTBackup::hashsize ()
 {
-    uint32_t hs = hasher->DigestSize ();
+    uint32_T hs = hasher->DigestSize ();
     if (encipher != NULL) hs += encipher->BlockSize ();
     return hs;
 }
@@ -2237,11 +2243,11 @@ uint32_t FTBackup::hashsize ()
  * @param src = input pointer
  * @param nby = number of bytes, assumed to be multiple of 4 ge 16
  */
-void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
+void FTBackup::xorblockdata (void *dst, void const *src, uint32_T nby)
 {
 #ifdef __amd64__
-    uint32_t nqd;
-    uint64_t tmp;
+    uint32_T nqd;
+    uint64_T tmp;
 
     nqd = nby / 8;
     asm volatile (
@@ -2267,9 +2273,9 @@ void FTBackup::xorblockdata (void *dst, void const *src, uint32_t nby)
                 : : "cc", "memory");
     }
 #else
-    uint32_t *du32 = (uint32_t *) dst;
-    uint32_t const *su32 = (uint32_t const *) src;
-    uint32_t nu32 = nby / 4;
+    uint32_T *du32 = (uint32_T *) dst;
+    uint32_T const *su32 = (uint32_T const *) src;
+    uint32_T nu32 = nby / 4;
     do *(du32 ++) ^= *(su32 ++);
     while (-- nu32 > 0);
 #endif
@@ -2368,7 +2374,7 @@ int FTBackup::decodecipherargs (int argc, char **argv, int i, bool enc)
     /*
      * Set up hash of the key string as the block cipher key.
      */
-    hashinibuf = (uint8_t *) malloc (hashinilen);
+    hashinibuf = (uint8_T *) malloc (hashinilen);
     if (hashinibuf == NULL) NOMEM ();
     hasher->Update ((byte const *) keyline, (size_t) strlen (keyline));
     hasher->Final (hashinibuf);

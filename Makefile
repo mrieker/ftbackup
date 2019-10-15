@@ -1,5 +1,5 @@
 
-CFLAGS   ?= -Wall -Werror -O2
+CFLAGS   ?= -Wall -Wno-deprecated-declarations -Wno-terminate -Werror -O2
 STATIC   ?=
 
 #
@@ -27,18 +27,20 @@ DISTVER   := $(subst -,,$(firstword $(COMMITDATE)))$(subst 0,+,$(subst 1,,$(COMM
 #  List of files that go into distribution
 #
 DISTFILES := \
-    cryptopp562.files.cpp.patch \
-    cryptopp562.misc.h.patch    \
-    cryptopp562.zip             \
-    ftbackup.cpp                \
-    ftbackup.h                  \
-    ftbackup.html               \
-    ftbreader.cpp               \
-    ftbreader.h                 \
-    ftbwriter.cpp               \
-    ftbwriter.h                 \
-    INSTALL.txt                 \
-    Makefile                    \
+    cryptopp562.files.cpp.patch   \
+    cryptopp562.GNUmakefile.patch \
+    cryptopp562.misc.h.patch      \
+    cryptopp562.wake.cpp.patch    \
+    cryptopp562.zip               \
+    ftbackup.cpp                  \
+    ftbackup.h                    \
+    ftbackup.html                 \
+    ftbreader.cpp                 \
+    ftbreader.h                   \
+    ftbwriter.cpp                 \
+    ftbwriter.h                   \
+    INSTALL.txt                   \
+    Makefile                      \
     $(VERFILE)
 
 #
@@ -96,7 +98,9 @@ cryptopp562/libcryptopp.a: cryptopp562.zip
 	mkdir cryptopp562
 	cd cryptopp562 ; unzip ../cryptopp562.zip
 	patch cryptopp562/files.cpp < cryptopp562.files.cpp.patch
+	patch cryptopp562/GNUmakefile < cryptopp562.GNUmakefile.patch
 	patch cryptopp562/misc.h < cryptopp562.misc.h.patch
+	patch cryptopp562/wake.cpp < cryptopp562.wake.cpp.patch
 	cd cryptopp562 ; $(MAKE) libcryptopp.a
 
 #

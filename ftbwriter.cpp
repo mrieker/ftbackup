@@ -27,12 +27,12 @@ struct SkipName {
 };
 
 static int pathcmp (char const *p1, char const *p2);
-static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val);
+static uint32_T inspackeduint32 (char *buf, uint32_T idx, uint32_T val);
 static bool skipbyname (SkipName *skipname, char const *path);
-static bool writeall (int fd, uint8_t const *buf, int len);
-static uint64_t getruntime ();
+static bool writeall (int fd, uint8_T const *buf, int len);
+static uint64_T getruntime ();
 static void printthreadcputime (char const *name);
-static void printthreadruntime (char const *name, uint64_t runtime);
+static void printthreadruntime (char const *name, uint64_T runtime);
 
 SinceReader::SinceReader ()
 {
@@ -66,7 +66,7 @@ bool SinceReader::open (char const *name)
 
 bool SinceReader::read ()
 {
-    uint32_t i;
+    uint32_T i;
 
     if (!rdraw (&ctime, sizeof ctime)) return false;
     i = 0;
@@ -90,10 +90,10 @@ void SinceReader::close ()
     }
 }
 
-bool SinceReader::rdraw (void *buf, uint32_t len)
+bool SinceReader::rdraw (void *buf, uint32_T len)
 {
     int rc;
-    uint32_t got;
+    uint32_T got;
 
     while (len > 0) {
 
@@ -136,7 +136,7 @@ bool SinceReader::rdraw (void *buf, uint32_t len)
         memcpy (buf, zsinc.next_out, got);
         zsinc.next_out  += got;
         zsinc.avail_out -= got;
-        buf  = (void *)((ulong_t)buf + got);
+        buf  = (void *)((ulong_T)buf + got);
         len -= got;
     }
     return true;
@@ -189,7 +189,7 @@ FTBWriter::~FTBWriter ()
     Block *b;
     ComprSlot cs;
     HistSlot hs;
-    uint32_t i;
+    uint32_T i;
     void *f;
 
     if (xorblocks != NULL) {
@@ -423,7 +423,7 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
     Header *hdr;
     int rc;
     struct stat statbuf;
-    uint32_t hdrnamealloc, i, j, pathlen, xattrslistlen, xattrsvalslen;
+    uint32_T hdrnamealloc, i, j, pathlen, xattrslistlen, xattrsvalslen;
 
     /*
      * See what type of thing we are dealing with.
@@ -514,7 +514,7 @@ bool FTBWriter::write_file (char const *path, struct stat const *dirstat)
                 free (hdr);
                 return false;
             }
-            j = inspackeduint32 (hdr->name, pathlen, (uint32_t) rc);
+            j = inspackeduint32 (hdr->name, pathlen, (uint32_T) rc);
             memmove (hdr->name + j, hdr->name + pathlen + 5, rc);
             pathlen = j + rc;
             j = strlen (xattrslistbuf + i);
@@ -565,7 +565,7 @@ static int pathcmp (char const *p1, char const *p2)
     return (int) (unsigned int) (unsigned char) c1 - (int) (unsigned int) (unsigned char) c2;
 }
 
-static uint32_t inspackeduint32 (char *buf, uint32_t idx, uint32_t val)
+static uint32_T inspackeduint32 (char *buf, uint32_T idx, uint32_T val)
 {
     while (val > 0x7F) {
         buf[idx++] = val | 0x80;
@@ -584,8 +584,8 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
     int fd, rc;
     struct stat statend;
     time_t now;
-    uint32_t i, plen;
-    uint64_t len, ofs;
+    uint32_T i, plen;
+    uint64_T len, ofs;
     void *buf;
 
     /*
@@ -600,7 +600,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
         if (inodeslist[i] == statbuf->st_ino) break;
     }
     if ((i < inodesused) && (inodesmtim[i] == hdr->mtimns)) {
-        uint32_t fileno = i;
+        uint32_T fileno = i;
         hdr->flags = HFL_HDLINK;
         write_header (hdr);
         write_raw (&fileno, sizeof fileno, false);
@@ -650,11 +650,11 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
                 ok = false;
                 memset (buf, 0x69, len);
                 rc = len;
-            } else if ((uint32_t) rc < len) {
+            } else if ((uint32_T) rc < len) {
                 fprintf (stderr, "ftbackup: pread(%s, ..., %llu, %llu) error: only got %d byte%s\n",
                         hdr->name, len, ofs, rc, ((rc == 1) ? "" : "s"));
                 ok = false;
-                memset ((uint8_t *) buf + rc, 0x69, len - rc);
+                memset ((uint8_T *) buf + rc, 0x69, len - rc);
             } else {
                 rc = len;  // might be more if plen > len and file has been extended since hdr->size was set
             }
@@ -674,7 +674,7 @@ bool FTBWriter::write_regular (Header *hdr, struct stat const *statbuf)
         do inodessize += inodessize / 2 + 10;
         while (inodessize <= i);
         inodeslist = (ino_t *) realloc (inodeslist, inodessize * sizeof *inodeslist);
-        inodesmtim = (uint64_t *) realloc (inodesmtim, inodessize * sizeof *inodesmtim);
+        inodesmtim = (uint64_T *) realloc (inodesmtim, inodessize * sizeof *inodesmtim);
         if ((inodeslist == NULL) || (inodesmtim == NULL)) NOMEM ();
     }
     if (inodesdevno != statbuf->st_dev) {
@@ -857,7 +857,7 @@ bool FTBWriter::write_directory (Header *hdr, struct stat const *statbuf)
                     memcpy (path + pathlen + j, name + j, len);
                 }
             }
-            if ((ulong_t) (bbb - buf) != hdr->size) abort ();
+            if ((ulong_T) (bbb - buf) != hdr->size) abort ();
             write_queue (buf, bbb - buf, 1);
         }
     }
@@ -958,7 +958,7 @@ bool FTBWriter::write_symlink (Header *hdr)
             fprintf (stderr, "ftbackup: readlink(%s) error: %s\n", hdr->name, mystrerr (errno));
             return false;
         }
-        if ((uint32_t) rc <= hdr->size) break;
+        if ((uint32_T) rc <= hdr->size) break;
         hdr->size += hdr->size / 2 + 1;
         buf = (char *) realloc (buf, hdr->size + 1);
     }
@@ -999,7 +999,7 @@ void FTBWriter::write_header (Header *hdr)
         }
         maybe_record_file (hdr->ctimns, hdr->name);
     }
-    write_raw (hdr, (ulong_t)(&hdr->name[hdr->nameln]) - (ulong_t)hdr, true);
+    write_raw (hdr, (ulong_T)(&hdr->name[hdr->nameln]) - (ulong_T)hdr, true);
 }
 
 
@@ -1032,9 +1032,9 @@ bool FTBWriter::skipbysince (Header const *hdr)
 /**
  * @brief Write file's ctime and name to the opt_record file if there is one.
  */
-void FTBWriter::maybe_record_file (uint64_t ctime, char const *name)
+void FTBWriter::maybe_record_file (uint64_T ctime, char const *name)
 {
-    uint32_t namelen;
+    uint32_T namelen;
 
     if (recofd >= 0) {
         write_reco_data (&ctime, sizeof ctime);
@@ -1043,7 +1043,7 @@ void FTBWriter::maybe_record_file (uint64_t ctime, char const *name)
     }
 }
 
-void FTBWriter::write_reco_data (void const *buf, uint32_t len)
+void FTBWriter::write_reco_data (void const *buf, uint32_T len)
 {
     int rc;
 
@@ -1070,7 +1070,7 @@ void FTBWriter::write_reco_data (void const *buf, uint32_t len)
  * @param len = length of data to write
  * @param hdr = true iff it is a file header; else it is data
  */
-void FTBWriter::write_raw (void const *buf, uint32_t len, bool hdr)
+void FTBWriter::write_raw (void const *buf, uint32_T len, bool hdr)
 {
     void *mem;
 
@@ -1091,7 +1091,7 @@ void FTBWriter::write_raw (void const *buf, uint32_t len, bool hdr)
  *              0: write data bytes as given without compression
  *             -1: write file header bytes as given without compression
  */
-void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
+void FTBWriter::write_queue (void *buf, uint32_T len, int dty)
 {
     ComprSlot slot;
 
@@ -1114,7 +1114,7 @@ void FTBWriter::write_queue (void *buf, uint32_t len, int dty)
         memset (block, 0, sizeof *block);                               \
         block->seqno    = ++ lastseqno;                                 \
         zstrm.next_out  = block->data;                                  \
-        zstrm.avail_out = (ulong_t)block + bs - (ulong_t)block->data;   \
+        zstrm.avail_out = (ulong_T)block + bs - (ulong_T)block->data;   \
     }                                                                   \
 } while (false)
 
@@ -1135,7 +1135,7 @@ void *FTBWriter::compr_thread ()
     HistSlot hs;
     int dty, i, rc;
     ComprSlot slot;
-    uint32_t bs, len;
+    uint32_T bs, len;
     void *buf;
 
     /*
@@ -1165,7 +1165,7 @@ void *FTBWriter::compr_thread ()
         if (dty > 0) {
             if (!zisopen) {
                 void    *no = zstrm.next_out;
-                uint32_t ao = zstrm.avail_out;
+                uint32_T ao = zstrm.avail_out;
                 memset (&zstrm, 0, sizeof zstrm);
                 rc = deflateInit (&zstrm, Z_DEFAULT_COMPRESSION);
                 if (rc != Z_OK) INTERR (deflateInit, rc);
@@ -1214,7 +1214,7 @@ void *FTBWriter::compr_thread ()
 
                     // if first header in the block, save its offset for recoveries
                     if (block->hdroffs == 0) {
-                        block->hdroffs = (ulong_t)zstrm.next_out - (ulong_t)block;
+                        block->hdroffs = (ulong_T)zstrm.next_out - (ulong_T)block;
                     }
 
                     // if writing history, queue to history writing thread
@@ -1291,7 +1291,7 @@ void *FTBWriter::hist_thread ()
     IX_Rsz filelen;
     IX_uLong sts;
     struct timeval nowtv;
-    uint64_t wht_runtime;
+    uint64_T wht_runtime;
     void *filerab, *saverab;
 
     wht_runtime = - getruntime ();
@@ -1321,11 +1321,11 @@ void *FTBWriter::hist_thread ()
     sprintf (histdbname_saves, "%s.saves", histdbname);
     sts = ix_open_file2 (histdbname_saves, 0, 10, &saverab, IX_SHARE_R, 0, NULL);
     if (sts == IX_NOSUCHFILE) {
-        static IX_Rsz const ksz[] = { sizeof (uint64_t),  DB_SAVE_PATH_MAX };
-        static IX_Rsz const kof[] = {                 0, sizeof (uint64_t) };
+        static IX_Rsz const ksz[] = { sizeof (uint64_T),  DB_SAVE_PATH_MAX };
+        static IX_Rsz const kof[] = {                 0, sizeof (uint64_T) };
         static IX_Kat const kat[] = {                 0,                 0 };
-        sts = ix_create_file3 (histdbname_saves, 2, ksz, kof, kat, (sizeof (uint64_t) + DB_SAVE_PATH_MAX) * 5,
-                               sizeof (uint64_t) + DB_SAVE_PATH_MAX, 10, &saverab, IX_SHARE_R, 0, NULL);
+        sts = ix_create_file3 (histdbname_saves, 2, ksz, kof, kat, (sizeof (uint64_T) + DB_SAVE_PATH_MAX) * 5,
+                               sizeof (uint64_T) + DB_SAVE_PATH_MAX, 10, &saverab, IX_SHARE_R, 0, NULL);
         if (sts != IX_SUCCESS) {
             fprintf (stderr, "ftbackup: ix_create_file(%s) error %s\n", histdbname_saves, ix_errlist (sts));
             exit (EX_HIST);
@@ -1339,7 +1339,7 @@ void *FTBWriter::hist_thread ()
      * Write saveset record using an hopefully unique 64-bit number.
      */
     char const *ssname = (histssname == NULL) ? ssbasename : histssname;
-    uint32_t ssnamelen = strlen (ssname);
+    uint32_T ssnamelen = strlen (ssname);
     if (ssnamelen > sizeof savebuf.path - 1) ssnamelen = sizeof savebuf.path - 1;
     if (gettimeofday (&nowtv, NULL) < 0) abort ();
     memset (&savebuf, 0, sizeof savebuf);
@@ -1379,9 +1379,9 @@ void *FTBWriter::hist_thread ()
         sts = ix_search_key (filerab, IX_SEARCH_EQF, 0, strlen (hs.fname), (IX_Rbf *)hs.fname, sizeof filebuf, (IX_Rbf *)&filebuf, &filelen);
         if (sts == IX_RECNOTFOUND) {
             memset (filebuf.path, 0, sizeof filebuf.path);
-            strncpy (filebuf.path, hs.fname, DB_FILE_PATH_MAX);
+            strncpy (filebuf.path, hs.fname, DB_FILE_PATH_MAX - 1);
             filebuf.saves[0] = savebuf.timens_BE;
-            sts = ix_insert_rec (filerab, (ulong_t)&filebuf.saves[1] - (ulong_t)&filebuf, (IX_Rbf *)&filebuf);
+            sts = ix_insert_rec (filerab, (ulong_T)&filebuf.saves[1] - (ulong_T)&filebuf, (IX_Rbf *)&filebuf);
             if (sts != IX_SUCCESS) {
                 fprintf (stderr, "ftbackup: ix_insert(%s) error: %s\n", histdbname_files, ix_errlist (sts));
                 exit (EX_HIST);
@@ -1391,7 +1391,7 @@ void *FTBWriter::hist_thread ()
             exit (EX_HIST);
         } else {
             if (filelen + sizeof filebuf.saves[0] > sizeof filebuf) filelen -= sizeof filebuf.saves[0];
-            memmove (&filebuf.saves[1], &filebuf.saves[0], (ulong_t)&filebuf + filelen - (ulong_t)filebuf.saves);
+            memmove (&filebuf.saves[1], &filebuf.saves[0], (ulong_T)&filebuf + filelen - (ulong_T)filebuf.saves);
             filebuf.saves[0] = savebuf.timens_BE;
             filelen += sizeof filebuf.saves[0];
             sts = ix_modify_rec (filerab, filelen, (IX_Rbf *)&filebuf);
@@ -1433,8 +1433,8 @@ void *FTBWriter::write_thread_wrapper (void *ftbw)
 void *FTBWriter::write_thread ()
 {
     Block *block;
-    uint32_t i;
-    uint64_t wst_runtime;
+    uint32_T i;
+    uint64_T wst_runtime;
 
     wst_runtime = - getruntime ();
 
@@ -1503,7 +1503,7 @@ Block *FTBWriter::malloc_block ()
 {
     Block *block;
     int rc;
-    uint32_t bs;
+    uint32_T bs;
 
     bs = 1 << l2bs;
     rc = posix_memalign ((void **)&block, PAGESIZE, bs);
@@ -1517,7 +1517,7 @@ Block *FTBWriter::malloc_block ()
 void FTBWriter::xor_data_block (Block *block)
 {
     Block *xorblock;
-    uint32_t bs, dataseqno, i, oldxorbc;
+    uint32_T bs, dataseqno, i, oldxorbc;
 
     bs = (1 << l2bs) - hashsize ();
 
@@ -1574,7 +1574,7 @@ void FTBWriter::xor_data_block (Block *block)
 void FTBWriter::hash_xor_blocks ()
 {
     Block *block;
-    uint32_t i;
+    uint32_T i;
 
     for (i = 0; i < xorgc; i ++) {
         block = xorblocks[i];
@@ -1593,15 +1593,15 @@ void FTBWriter::hash_xor_blocks ()
  */
 void FTBWriter::hash_block (Block *block)
 {
-    uint32_t bs, cbs, i;
-    uint64_t *array, temp[2];
+    uint32_T bs, cbs, i;
+    uint64_T *array, temp[2];
 
     /*
      * Hash the header and the data.
      */
     bs = (1U << l2bs) - hashsize ();
-    hasher->Update ((uint8_t *)block, bs);
-    hasher->Final  ((uint8_t *)block + bs);
+    hasher->Update ((uint8_T *)block, bs);
+    hasher->Final  ((uint8_T *)block + bs);
 
     if (encipher != NULL) {
 
@@ -1610,7 +1610,7 @@ void FTBWriter::hash_block (Block *block)
          */
         cbs = encipher->BlockSize ();
         bs  = (1U << l2bs) - cbs;
-        if (fread ((uint8_t *) block + bs, cbs, 1, noncefile) != 1) {
+        if (fread ((uint8_T *) block + bs, cbs, 1, noncefile) != 1) {
             fprintf (stderr, "read(/dev/urandom) error: %s\n", mystrerr (errno));
             abort ();
         }
@@ -1621,7 +1621,7 @@ void FTBWriter::hash_block (Block *block)
          */
         // modified CBC: enc[i] = encrypt ( clr[i] ^ encrypt ( enc[i+1] ))
         if (offsetof (Block, crip) % 16 != 0) abort ();
-        array = (uint64_t *) block;
+        array = (uint64_T *) block;
         i     = bs / 8;
         switch (cbs) {
             case  8: {
@@ -1654,7 +1654,7 @@ void FTBWriter::hash_block (Block *block)
  */
 void FTBWriter::write_ssblock (Block *block)
 {
-    uint32_t bs;
+    uint32_T bs;
 
     if ((opt_segsize > 0) && (byteswrittentoseg >= opt_segsize)) {
         if (close (ssfd) < 0) {
@@ -1671,7 +1671,7 @@ void FTBWriter::write_ssblock (Block *block)
     }
 
     bs = 1U << l2bs;
-    if (!writeall (ssfd, (uint8_t const *) block, bs)) {
+    if (!writeall (ssfd, (uint8_T const *) block, bs)) {
         fprintf (stderr, "ftbackup: write() saveset error: %s\n", mystrerr (errno));
         exit (EX_SSIO);
     }
@@ -1695,7 +1695,7 @@ SlotQueue<T>::SlotQueue ()
 template <class T>
 void SlotQueue<T>::enqueue (T slot)
 {
-    uint32_t i;
+    uint32_T i;
 
     pthread_mutex_lock (&mutex);
     while (used == SQ_NSLOTS) {
@@ -1713,7 +1713,7 @@ template <class T>
 bool SlotQueue<T>::trydequeue (T *slot)
 {
     bool suc;
-    uint32_t i;
+    uint32_T i;
 
     pthread_mutex_lock (&mutex);
     suc = (used != 0);
@@ -1734,7 +1734,7 @@ template <class T>
 T SlotQueue<T>::dequeue ()
 {
     T slot;
-    uint32_t i;
+    uint32_T i;
 
     pthread_mutex_lock (&mutex);
     while (used == 0) {
@@ -1751,7 +1751,7 @@ T SlotQueue<T>::dequeue ()
     return slot;
 }
 
-static bool writeall (int fd, uint8_t const *buf, int len)
+static bool writeall (int fd, uint8_T const *buf, int len)
 {
     int rc;
 
@@ -1767,14 +1767,14 @@ static bool writeall (int fd, uint8_t const *buf, int len)
     return true;
 }
 
-static uint64_t getruntime ()
+static uint64_T getruntime ()
 {
     int rc;
     struct timespec tp;
 
     rc = clock_gettime (CLOCK_MONOTONIC, &tp);
     if (rc < 0) SYSERRNO (clock_gettime);
-    return ((uint64_t) tp.tv_sec * 1000000000ULL) + tp.tv_nsec;
+    return ((uint64_T) tp.tv_sec * 1000000000ULL) + tp.tv_nsec;
 }
 
 static void printthreadcputime (char const *name)
@@ -1785,10 +1785,10 @@ static void printthreadcputime (char const *name)
     rc = clock_gettime (CLOCK_THREAD_CPUTIME_ID, &tp);
     if (rc < 0) SYSERRNO (clock_gettime);
     fprintf (stderr, "ftbackup: thread %8s cpu time %6u.%.9u\n",
-            name, (uint32_t) tp.tv_sec, (uint32_t) tp.tv_nsec);
+            name, (uint32_T) tp.tv_sec, (uint32_T) tp.tv_nsec);
 }
 
-static void printthreadruntime (char const *name, uint64_t runtime)
+static void printthreadruntime (char const *name, uint64_T runtime)
 {
     int rc;
     struct timespec tp;
@@ -1797,6 +1797,6 @@ static void printthreadruntime (char const *name, uint64_t runtime)
     if (rc < 0) SYSERRNO (clock_gettime);
     fprintf (stderr, "ftbackup: thread %8s run time %6u.%.9u, cpu time %6u.%.9u\n",
             name, 
-            (uint32_t) (runtime / 1000000000U), (uint32_t) (runtime % 1000000000U),
-            (uint32_t) tp.tv_sec, (uint32_t) tp.tv_nsec);
+            (uint32_T) (runtime / 1000000000U), (uint32_T) (runtime % 1000000000U),
+            (uint32_T) tp.tv_sec, (uint32_T) tp.tv_nsec);
 }

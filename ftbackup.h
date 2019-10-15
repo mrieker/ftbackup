@@ -75,71 +75,71 @@ extern "C" {
 #define SYSERR(name,err) do { fprintf (stderr, "ftbackup: " #name "() error: %s\n", mystrerr (err)); abort (); } while (0)
 #define SYSERRNO(name) SYSERR(name,errno)
 
-typedef unsigned int uint32_t;
-typedef unsigned char uint8_t;
-typedef unsigned short uint16_t;
-typedef unsigned long long uint64_t;
-typedef unsigned long ulong_t;
+typedef unsigned int uint32_T;
+typedef unsigned char uint8_T;
+typedef unsigned short uint16_T;
+typedef unsigned long long uint64_T;
+typedef unsigned long ulong_T;
 
 struct Block {
     char        magic[8];   // magic number BLOCK_MAGIC
-    uint32_t    seqno;      // block sequence number
-    uint32_t    xorno;      // xor sequence number (0 for data blocks)
-    uint8_t     crip[0];    // start of encryption (16-byte boundary)
-    uint32_t    hdroffs;    // offset of first header in block
-    uint8_t     l2bs;       // log2 block size
-    uint8_t     xorbc;      // xor block count (0 for data blocks)
-    uint8_t     xorgc;      // xor group count
-    uint8_t     xorsc;      // xor span count
-    uint8_t     data[0];
+    uint32_T    seqno;      // block sequence number
+    uint32_T    xorno;      // xor sequence number (0 for data blocks)
+    uint8_T     crip[0];    // start of encryption (16-byte boundary)
+    uint32_T    hdroffs;    // offset of first header in block
+    uint8_T     l2bs;       // log2 block size
+    uint8_T     xorbc;      // xor block count (0 for data blocks)
+    uint8_T     xorgc;      // xor group count
+    uint8_T     xorsc;      // xor span count
+    uint8_T     data[0];
 };
 
 struct Header {
     char        magic[8];   // magic number HEADER_MAGIC
-    uint64_t    mtimns;     // data mod time
-    uint64_t    ctimns;     // attr mod time
-    uint64_t    atimns;     // access time
-    uint64_t    size;       // file size
-    uint32_t    fileno;     // file number (starts at 1)
-    uint32_t    stmode;     // protection and type
-    uint32_t    ownuid;     // owner UID
-    uint32_t    owngid;     // owner GID
-    uint32_t    nameln;     // name and xattr length (incl null)
-    uint8_t     flags;      // flag bits
+    uint64_T    mtimns;     // data mod time
+    uint64_T    ctimns;     // attr mod time
+    uint64_T    atimns;     // access time
+    uint64_T    size;       // file size
+    uint32_T    fileno;     // file number (starts at 1)
+    uint32_T    stmode;     // protection and type
+    uint32_T    ownuid;     // owner UID
+    uint32_T    owngid;     // owner GID
+    uint32_T    nameln;     // name and xattr length (incl null)
+    uint8_T     flags;      // flag bits
     char        name[0];    // file name (incl null) and xattrs
 };
 
 struct HistFileRec {
     char path[DB_FILE_PATH_MAX];        // pathname of saved file
-    uint64_t saves[DB_FILE_SAVE_MAX];   // timens_BE of savesets
+    uint64_T saves[DB_FILE_SAVE_MAX];   // timens_BE of savesets
 };
 
 struct HistSaveRec {
-    uint64_t timens_BE;                 // nanosecond time (big-endian) of saveset
+    uint64_T timens_BE;                 // nanosecond time (big-endian) of saveset
     char path[DB_SAVE_PATH_MAX];        // pathname of saveset
 };
 
 struct FTBackup {
-    uint8_t  l2bs;
-    uint8_t  xorgc;
-    uint8_t  xorsc;
+    uint8_T  l2bs;
+    uint8_T  xorgc;
+    uint8_T  xorsc;
 
     CryptoPP::BlockCipher *decipher;
     CryptoPP::BlockCipher *encipher;
     CryptoPP::HashTransformation *hasher;
-    uint8_t *hashinibuf;
-    uint32_t hashinilen;
+    uint8_T *hashinibuf;
+    uint32_T hashinilen;
 
     FTBackup ();
     ~FTBackup ();
 
-    static void print_header (FILE *out, Header const *hdr, char const *name, uint64_t ofs);
+    static void print_header (FILE *out, Header const *hdr, char const *name, uint64_T ofs);
     bool blockisvalid (Block *block);
     bool blockbaseisvalid (Block *block);
     int decodecipherargs (int argc, char **argv, int i, bool enc);
     void maybesetdefaulthasher ();
-    uint32_t hashsize ();
-    static void xorblockdata (void *dst, void const *src, uint32_t nby);
+    uint32_T hashsize ();
+    static void xorblockdata (void *dst, void const *src, uint32_T nby);
 };
 
 struct IFSAccess {
@@ -149,9 +149,9 @@ struct IFSAccess {
     virtual int fsclose (int fd) =0;
     virtual int fscreat (char const *name, char const *tmpname, bool overwrite, mode_t mode=0) =0;
     virtual int fsclose (int fd, char const *name, char const *tmpname, bool overwrite) =0;
-    virtual int fsftruncate (int fd, uint64_t len) =0;
+    virtual int fsftruncate (int fd, uint64_T len) =0;
     virtual int fsread (int fd, void *buf, int len) =0;
-    virtual int fspread (int fd, void *buf, int len, uint64_t pos) =0;
+    virtual int fspread (int fd, void *buf, int len, uint64_T pos) =0;
     virtual int fswrite (int fd, void const *buf, int len) =0;
     virtual int fsfstat (int fd, struct stat *buf) =0;
     virtual int fsstat (char const *name, struct stat *buf) =0;
@@ -186,7 +186,7 @@ bool wildcardchar (char c);
 bool wildcardmatch (char const *wild, char const *name);
 int myalphasort (const struct dirent **a, const struct dirent **b);
 
-static inline uint64_t quadswab (uint64_t q)
+static inline uint64_T quadswab (uint64_T q)
 {
     return ((q >> 56) & 0xFFU) | ((q >> 40) & 0xFF00U) | ((q >> 24) & 0xFF0000U) | ((q >> 8) & 0xFF000000U) |
            ((q << 8) & 0xFF00000000ULL) | ((q << 24) & 0xFF0000000000ULL) | ((q << 40) & 0xFF000000000000ULL) |

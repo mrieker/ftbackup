@@ -22,9 +22,9 @@
 
 struct DirTime {
     DirTime *next;
-    uint64_t atimns;
-    uint64_t mtimns;
-    uint16_t nameln;
+    uint64_T atimns;
+    uint64_T mtimns;
+    uint16_T nameln;
     char     name[1];
 };
 
@@ -32,13 +32,13 @@ struct EndOfSSFile {
 };
 
 struct LostSSBlock {
-    uint32_t seqno;
-    LostSSBlock (uint32_t sn) { seqno = sn; }
+    uint32_T seqno;
+    LostSSBlock (uint32_T sn) { seqno = sn; }
 };
 
-static uint32_t extpackeduint32 (char const **ptr);
-static uint32_t findnextsegno (char const *basename, uint32_t lastsegno);
-static void updatetimes (IFSAccess *ifsa, char const *name, uint64_t atimns, uint64_t mtimns);
+static uint32_T extpackeduint32 (char const **ptr);
+static uint32_T findnextsegno (char const *basename, uint32_T lastsegno);
+static void updatetimes (IFSAccess *ifsa, char const *name, uint64_T atimns, uint64_T mtimns);
 static bool rmdirentry  (IFSAccess *ifsa, char const *dirname, char const *entname);
 
 FTBReader::FTBReader ()
@@ -86,7 +86,7 @@ FTBReader::FTBReader ()
 FTBReader::~FTBReader ()
 {
     LinkedBlock *linkedBlock;
-    uint32_t i;
+    uint32_T i;
 
     if (xorblocks != NULL) {
         for (i = 0; i < xorgc; i ++) {
@@ -136,8 +136,8 @@ int FTBReader::read_saveset (char const *ssname)
     DirTime *dirTime, *dirTimes;
     Header *hdr;
     int cmp, ssnamelen;
-    uint32_t hassegno, hdrall, lastfilenofinished;
-    uint32_t skipped, xattrslistlen, xattrsvalulen;
+    uint32_T hassegno, hdrall, lastfilenofinished;
+    uint32_T skipped, xattrslistlen, xattrsvalulen;
 
     maybesetdefaulthasher ();
 
@@ -244,7 +244,7 @@ int FTBReader::read_saveset (char const *ssname)
                  */
                 fileopen = false;
                 if (needhdr) {
-                    read_raw (hdr, (ulong_t)hdr->name - (ulong_t)hdr, false);
+                    read_raw (hdr, (ulong_T)hdr->name - (ulong_T)hdr, false);
                     if (memcmp (hdr->magic, HEADER_MAGIC, 8) != 0) {
                         fprintf (stderr, "ftbackup: bad header magic number\n");
                         throw new LostSSBlock (0);
@@ -358,7 +358,7 @@ int FTBReader::read_saveset (char const *ssname)
                     try {
                         do {
                             rblock = read_block (true);
-                            read_raw (hdr, (ulong_t)hdr->name - (ulong_t)hdr, false);
+                            read_raw (hdr, (ulong_T)hdr->name - (ulong_T)hdr, false);
                         } while (memcmp (hdr->magic, HEADER_MAGIC, 8) != 0);
                         break;
                     } catch (LostSSBlock *lssb) {
@@ -407,14 +407,14 @@ int FTBReader::read_saveset (char const *ssname)
     }
 }
 
-static uint32_t extpackeduint32 (char const **ptr)
+static uint32_T extpackeduint32 (char const **ptr)
 {
     int shf = 0;
-    uint32_t val = 0;
-    uint32_t byt;
+    uint32_T val = 0;
+    uint32_T byt;
 
     do {
-        byt  = (uint8_t) *((*ptr) ++);
+        byt  = (uint8_T) *((*ptr) ++);
         val |= (byt & 0x7F) << shf;
         shf += 7;
     } while (byt & 0x80);
@@ -435,9 +435,9 @@ bool FTBReader::read_regular (Header *hdr, char const *dstname)
     int fd, rc;
     struct stat statbuf;
     time_t now;
-    uint32_t oldfileno, wofs;
-    uint64_t len, rofs;
-    uint8_t buf[FILEIOSIZE];
+    uint32_T oldfileno, wofs;
+    uint64_T len, rofs;
+    uint8_T buf[FILEIOSIZE];
 
     /*
      * See if it's an hardlink to an earlier file in the saveset.
@@ -575,8 +575,8 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
     char buf[32768], *nameptr;
     int ient, nents;
     struct dirent **names;
-    uint32_t len, namelen, numsame, preserve;
-    uint64_t ofs;
+    uint32_T len, namelen, numsame, preserve;
+    uint64_T ofs;
 
     /*
      * Create the directory if it doesn't already exist.
@@ -691,7 +691,7 @@ bool FTBReader::read_directory (Header *hdr, char const *dstname, bool *setimes)
              *  len = total number of bytes in buf
              *  buf[0] = 0
              */
-            numsame = (uint8_t) *(nameptr ++);
+            numsame = (uint8_T) *(nameptr ++);
             namelen = strnlen (nameptr, buf + len - nameptr);
             if (numsame + 1 + namelen > sizeof buf) abort ();
             memmove (buf + numsame + 1, nameptr, namelen);
@@ -828,7 +828,7 @@ void FTBReader::do_mkdirs (char const *dstname)
  * @param zip = true: data in saveset is compressed, unzip it
  *             false: data in saveset is uncompressed, copy it
  */
-void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
+void FTBReader::read_raw (void *buf, uint32_T len, bool zip)
 {
     int rc;
 
@@ -852,8 +852,8 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
              * It is zipped, make sure our unzipper is open.
              */
             if (!zisopen) {
-                uint32_t ai = zstrm.avail_in;
-                uint32_t ao = zstrm.avail_out;
+                uint32_T ai = zstrm.avail_in;
+                uint32_T ao = zstrm.avail_out;
                 Bytef   *ni = zstrm.next_in;
                 Bytef   *no = zstrm.next_out;
                 memset (&zstrm, 0, sizeof zstrm);
@@ -889,8 +889,8 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
              * If unzipper open, close it.
              */
             if (zisopen) {
-                uint8_t junk[64];
-                uint32_t ao = zstrm.avail_out;
+                uint8_T junk[64];
+                uint32_T ao = zstrm.avail_out;
                 Bytef   *no = zstrm.next_out;
 
                 /*
@@ -949,7 +949,7 @@ void FTBReader::read_raw (void *buf, uint32_t len, bool zip)
 Block *FTBReader::read_block (bool skipfh)
 {
     Block *rblock;
-    uint32_t offs;
+    uint32_T offs;
 
     /*
      * Discard block from last call.
@@ -979,7 +979,7 @@ nextblock:
      * Point to block and get offset to start of data in block.
      */
     rblock = &linkedRBlock->block;
-    offs   = (ulong_t)rblock->data - (ulong_t)rblock;
+    offs   = (ulong_T)rblock->data - (ulong_T)rblock;
 
     /*
      * If skipping to next file header, get another block
@@ -994,7 +994,7 @@ nextblock:
      * Set up the data descriptor.
      */
     zstrm.avail_in = (1 << l2bs) - offs - hashsize ();
-    zstrm.next_in  = (uint8_t *)rblock + offs;
+    zstrm.next_in  = (uint8_T *)rblock + offs;
     return rblock;
 }
 
@@ -1009,8 +1009,8 @@ void FTBReader::read_first_block ()
     Block *miniBlock, *miniEncrp, *tblock;
     int rc;
     LinkedBlock *bigBlock;
-    uint32_t bs, bytesCopied, i;
-    uint64_t miniOffset;
+    uint32_T bs, bytesCopied, i;
+    uint64_T miniOffset;
 
     /*
      * Step through file by minimum block size until we find a valid block header.
@@ -1064,7 +1064,7 @@ void FTBReader::read_first_block ()
         /*
          * Copy the (possibly encrypted) mini block data to the bigBlock.
          */
-        memcpy ((uint8_t *)&bigBlock->block + bytesCopied, miniEncrp, MINBLOCKSIZE);
+        memcpy ((uint8_T *)&bigBlock->block + bytesCopied, miniEncrp, MINBLOCKSIZE);
         bytesCopied += MINBLOCKSIZE;
 
         /*
@@ -1100,7 +1100,7 @@ void FTBReader::read_first_block ()
         i = (tblock->seqno - 1) % xorgc;
         memcpy (xorblocks[i], tblock, bs - hashsize ());
 
-        gotxors = (uint8_t *) calloc (xorgc, sizeof *gotxors);
+        gotxors = (uint8_T *) calloc (xorgc, sizeof *gotxors);
         if (gotxors == NULL) NOMEM ();
         gotxors[i] = 1;
     }
@@ -1117,8 +1117,8 @@ FTBReader::LinkedBlock *FTBReader::read_or_recover_block ()
 {
     int rc;
     LinkedBlock *linkedBlock, **lLinkedBlock;
-    uint32_t bs, bsnh, i, xorno;
-    uint64_t lastreadoffs;
+    uint32_T bs, bsnh, i, xorno;
+    uint64_T lastreadoffs;
 
     bs = 1 << l2bs;
     if (readoffset % bs != 0) abort ();
@@ -1162,7 +1162,7 @@ noxoread:
         }
 
         // if short read, means we are at the end of file and there is nothing more we can do.
-        if ((uint32_t) rc < bs) {
+        if ((uint32_T) rc < bs) {
             fprintf (stderr, "ftbackup: pread(%llu) saveset error: end of file\n", lastreadoffs);
             throw new EndOfSSFile ();
         }
@@ -1227,7 +1227,7 @@ noxoread:
         /*
          * If it failed to read, output message and try to read next.
          */
-        if ((rc < 0) || ((uint32_t) rc != bs)) {
+        if ((rc < 0) || ((uint32_T) rc != bs)) {
             fprintf (stderr, "ftbackup: pread(%llu) saveset error: %s\n", lastreadoffs,
                     ((rc > 0) ? "partial read" : (rc == 0) ? "end of file" : mystrerr (errno)));
 
@@ -1344,7 +1344,7 @@ noxoread:
                 linkedBlock->block.xorno = 0;
                 linkedBlock->block.xorbc = 0;
                 for (i = 0; i < bsnh; i ++) {
-                    if (((uint8_t *)&linkedBlock->block)[i] != 0) {
+                    if (((uint8_T *)&linkedBlock->block)[i] != 0) {
                         fprintf (stderr, "ftbackup: xor block %u verify error\n", xorno);
                         break;
                     }
@@ -1413,11 +1413,11 @@ unrecoverable:
  * @brief Just like pread(), but also handles spilling over segment files.
  *        We also can fake errors at random.
  */
-long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
+long FTBReader::wrapped_pread (void *buf, long len, uint64_T pos)
 {
     long ofs, rc;
     struct timeval nowtv;
-    uint64_t rpos;
+    uint64_T rpos;
 
     /*
      * Simulate errors at random, but replay from /tmp/simrderrs.dat if present.
@@ -1466,7 +1466,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
          * If so, we should be able to read directly from file.
          * If not doing segments, do the read anyway and let it error out.
          */
-        if ((pos - pipepos < (uint64_t) ssstat.st_size) || (thissegno == 0)) {
+        if ((pos - pipepos < (uint64_T) ssstat.st_size) || (thissegno == 0)) {
             rc = pread (ssfd, buf, len, pos - pipepos);
             if (rc < 0) rc = handle_pread_error (buf, len, pos - pipepos);
             return rc;
@@ -1528,7 +1528,7 @@ long FTBReader::wrapped_pread (void *buf, long len, uint64_t pos)
  * @brief There was an error reading block from saveset,
  *        give the user option to retry or skip it.
  */
-long FTBReader::handle_pread_error (void *buf, long len, uint64_t pos)
+long FTBReader::handle_pread_error (void *buf, long len, uint64_T pos)
 {
     char cwdbuff[4096], ttybuff[32], ttyname[24];
     int ttyfd, saverrno;
@@ -1669,14 +1669,14 @@ long FTBReader::handle_pread_error (void *buf, long len, uint64_t pos)
  * @param bs = block size in bytes, including block header and including hash and nonce on the end
  * @returns whether or not the hash validated
  */
-bool FTBReader::decrypt_block (Block *block, uint32_t bs)
+bool FTBReader::decrypt_block (Block *block, uint32_T bs)
 {
-    uint32_t i;
-    uint64_t *array, temp[2];
+    uint32_T i;
+    uint64_T *array, temp[2];
 
     if (decipher != NULL) {
         // modified CBC: clr[i] = decrypt ( enc[i] ) ^ encrypt ( enc[i+1] )
-        array = (uint64_t *) block;
+        array = (uint64_T *) block;
         i     = offsetof (Block, crip) / 8;
         switch (decipher->BlockSize ()) {
             case  8: {
@@ -1699,8 +1699,8 @@ bool FTBReader::decrypt_block (Block *block, uint32_t bs)
     }
 
     bs -= hashsize ();
-    hasher->Update ((uint8_t *)block, bs);
-    return hasher->Verify ((uint8_t *)block + bs);
+    hasher->Update ((uint8_T *)block, bs);
+    return hasher->Verify ((uint8_T *)block + bs);
 }
 
 /**
@@ -1711,12 +1711,12 @@ bool FTBReader::decrypt_block (Block *block, uint32_t bs)
  * @returns 0: no next file found
  *       else: next greater segment number
  */
-static uint32_t findnextsegno (char const *basename, uint32_t lastsegno)
+static uint32_T findnextsegno (char const *basename, uint32_T lastsegno)
 {
     char *dirname, *name, *p;
     int i, nents, plen;
     struct dirent *de, **names;
-    uint32_t nextsegno, segno;
+    uint32_T nextsegno, segno;
 
     /*
      * Get basename's directory name in 'dirname'
@@ -1782,7 +1782,7 @@ static uint32_t findnextsegno (char const *basename, uint32_t lastsegno)
 /**
  * @brief Try to set a file's last access and last modification times.
  */
-static void updatetimes (IFSAccess *ifsa, char const *name, uint64_t atimns, uint64_t mtimns)
+static void updatetimes (IFSAccess *ifsa, char const *name, uint64_T atimns, uint64_T mtimns)
 {
     struct timespec times[2];
 
