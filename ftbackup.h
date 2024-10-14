@@ -188,9 +188,9 @@ int myalphasort (const struct dirent **a, const struct dirent **b);
 
 static inline uint64_T quadswab (uint64_T q)
 {
-    return ((q >> 56) & 0xFFU) | ((q >> 40) & 0xFF00U) | ((q >> 24) & 0xFF0000U) | ((q >> 8) & 0xFF000000U) |
-           ((q << 8) & 0xFF00000000ULL) | ((q << 24) & 0xFF0000000000ULL) | ((q << 40) & 0xFF000000000000ULL) |
-           ((q << 56) & 0xFF00000000000000ULL);
+    q = ((q & 0xFF00FF00FF00FF00ULL) >>  8) | ((q <<  8) & 0xFF00FF00FF00FF00ULL);
+    q = ((q & 0xFFFF0000FFFF0000ULL) >> 16) | ((q << 16) & 0xFFFF0000FFFF0000ULL);
+    return (q >> 32) | (q << 32);
 }
 
 #endif

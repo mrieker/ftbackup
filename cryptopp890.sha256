@@ -1,0 +1,26 @@
+#!/bin/bash -v
+#
+#  1) download zip file from https://www.cryptopp.com into ./cryptopp890.zip
+#  2) download signature file into ./cryptopp890.zip.sig
+#  3) download public key file into ./cryptopp890.zip.pub
+#  4) do the following gpg2 commands
+#
+#    gpg2 --yes -o ./cryptopp890.zip.pub.bin --dearmor ./cryptopp890.zip.pub
+#    gpg2 --no-default-keyring --keyring ./cryptopp890.zip.pub.bin --verify ./cryptopp890.zip.sig ./cryptopp890.zip
+#
+#  5) it should say 'gpg: Good signature from "Jeffrey Walton (Crypto++ Release) <noloader@gmail.com>"'
+#               not 'gpg: BAD signature from "Jeffrey Walton (Crypto++ Release) <noloader@gmail.com>"'
+#
+#  6) create sha256 and paste 64-digit number below
+#
+#    sha256sum cryptopp890.zip
+#
+set -e
+downloaded=`sha256sum cryptopp890.tmp`
+if [ "${downloaded:0:64}" != "4cc0ccc324625b80b695fcd3dee63a66f1a460d3e51b71640cdbfc4cd1a3779c" ]
+then
+    echo bad cryptopp890.zip download
+    exit 1
+fi
+touch cryptopp890.tmp
+mv -v cryptopp890.tmp cryptopp890.zip

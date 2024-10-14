@@ -27,7 +27,7 @@ DISTVER   := $(subst -,,$(firstword $(COMMITDATE)))$(subst 0,+,$(subst 1,,$(COMM
 #  List of files that go into distribution
 #
 DISTFILES := \
-    cryptopp820.sha256            \
+    cryptopp890.sha256            \
     ftbackup.cpp                  \
     ftbackup.h                    \
     ftbackup.html                 \
@@ -63,7 +63,7 @@ ftbackup: $(SRCFILES) ftbackup.h ftbreader.h ftbwriter.h $(VERFILE)
 #  Clean up
 #
 clean:
-	rm -rf cryptopp cryptopp820 cryptopp820.tmp cryptopp820.zip
+	rm -rf cryptopp cryptopp890 cryptopp890.tmp cryptopp890.zip
 	rm -f  ftbackup
 	rm -rf ftbackup-$(DISTVER)*
 	rm -rf ix/BIN
@@ -89,17 +89,17 @@ $(VERFILE):
 #
 #  Compile crypto library
 #
-cryptopp/libcryptopp.a: cryptopp820.zip
-	rm -rf cryptopp820
-	mkdir cryptopp820
-	cd cryptopp820 ; unzip ../cryptopp820.zip
-	cd cryptopp820 ; $(MAKE) libcryptopp.a
-	ln -s cryptopp820 cryptopp
+cryptopp/libcryptopp.a: cryptopp890.zip
+	rm -rf cryptopp890 cryptopp
+	mkdir cryptopp890
+	cd cryptopp890 ; unzip ../cryptopp890.zip
+	cd cryptopp890 ; $(MAKE) libcryptopp.a
+	ln -s cryptopp890 cryptopp
 
-cryptopp820.zip: cryptopp820.sha256
-	rm -f cryptopp820.tmp cryptopp820.zip
-	wget --no-check-certificate https://www.cryptopp.com/cryptopp820.zip -O cryptopp820.tmp
-	./cryptopp820.sha256
+cryptopp890.zip: cryptopp890.sha256
+	rm -f cryptopp890.tmp cryptopp890.zip
+	wget https://github.com/weidai11/cryptopp/releases/download/CRYPTOPP_8_9_0/cryptopp890.zip -O cryptopp890.tmp
+	./cryptopp890.sha256
 
 #
 #  Compile IX library
